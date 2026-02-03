@@ -31,8 +31,8 @@ class DiscoveryEngine:
             all_user_prefs.extend(prefs)
             logger.debug(f"User {user_id} has {len(prefs)} preference entries.")
 
-        # 2. Get the global autoplay pool
-        pool = await db.get_autoplay_pool(guild_id)
+        # 2. Get the global autoplay pool (stored with guild_id=0)
+        pool = await db.get_autoplay_pool(0)  # Query global pool
         logger.info(f"Global pool size: {len(pool)} tracks.")
 
         # 3. Score each track in the pool
@@ -106,7 +106,7 @@ class DiscoveryEngine:
         """Find a song similar to the seed song."""
         logger.info(f"Mood Search: Finding tracks similar to '{seed_song_title}' by {artist}")
         
-        pool = await db.get_autoplay_pool(guild_id)
+        pool = await db.get_autoplay_pool(0)  # Query global pool
         # Simple keyword matching for now - can be expanded to external APIs
         matches = [t for t in pool if t['artist'].lower() == artist.lower() or any(word in t['song'].lower() for word in seed_song_title.lower().split())]
         
