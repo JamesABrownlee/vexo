@@ -489,20 +489,27 @@ class Music(commands.Cog):
         elif state.is_autoplay and state.autoplay_buffer:
             next_song = state.autoplay_buffer[0]
             
-        if next_song and (not state.prefetched_song or state.prefetched_song.webpage_url != next_song.webpage_url):
-            try:
-                logger.info(f"Pre-fetching next song: '{next_song.title}'")
-                state.prefetched_song = next_song
-                state.prefetched_source = await YTDLSource.from_url(
-                    next_song.webpage_url,
-                    loop=self.bot.loop,
-                    stream=True,
-                    volume=state.volume
-                )
-            except Exception as e:
-                logger.error(f"Error pre-fetching song: {e}")
-                state.prefetched_source = None
-                state.prefetched_song = None
+        if next_song:
+            if not state.prefetched_song or state.prefetched_song.webpage_url != next_song.webpage_url:
+                try:
+                    logger.info(f"Pre-fetching next song: '{next_song.title}'")
+                    state.prefetched_song = next_song
+                    state.prefetched_source = await YTDLSource.from_url(
+                        next_song.webpage_url,
+                        loop=self.bot.loop,
+                        stream=True,
+                        volume=state.volume
+                    )
+                except Exception as e:
+                    logger.error(f"Error pre-fetching song: {e}")
+                    state.prefetched_source = None
+                    state.prefetched_song = None
+        elif state.is_autoplay and not state.is_fetching_autoplay:
+            # Buffer is empty, trigger a refill so we can prefetch something
+            await self._refill_autoplay_buffer(guild_id)
+            # Re-call self to try and prefetch now that buffer might have items
+            if state.autoplay_buffer:
+                await self._prefetch_next(guild_id)
     
     @app_commands.command(name="play", description="Play a song from YouTube")
     @app_commands.describe(query="Song name or YouTube URL")
@@ -532,28 +539,15 @@ class Music(commands.Cog):
                 embed=create_added_to_queue_embed(song, len(state.queue))
             )
         else:
-            state.current = song
+            # Enable autoplay by default for Vexo "Smart" experience
+            state.is_autoplay = True
             
-            try:
-                source = await YTDLSource.from_url(
-                    song.webpage_url,
-                    loop=self.bot.loop,
-                    stream=True,
-                    volume=state.volume
-                )
-                
-                vc.play(
-                    source,
-                    after=lambda e: self.play_next(interaction.guild.id, e)
-                )
-                
-                await interaction.followup.send(
-                    embed=create_now_playing_embed(song, state)
-                )
-            except Exception as e:
-                await interaction.followup.send(
-                    embed=create_error_embed(f"Error playing: {e}")
-                )
+            # Use the standardized play method which handles pre-fetching
+            self._play_song(interaction.guild.id, song)
+            
+            await interaction.followup.send(
+                embed=create_now_playing_embed(song, state)
+            )
 
     @app_commands.command(name="just_play", description="Start smart autoplay without a specific request")
     async def just_play(self, interaction: discord.Interaction):
