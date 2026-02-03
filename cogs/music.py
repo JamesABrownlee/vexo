@@ -345,10 +345,13 @@ class Music(commands.Cog):
         if error:
             print(f"Player error: {error}")
         
-        # Add current song to history in DB
+        # Add current song to history in DB - must use threadsafe since 'after' runs in a separate thread
         if state.current:
             state.history.append(state.current)
-            asyncio.create_task(db.add_to_history(guild_id, state.current.webpage_url, state.current.title))
+            asyncio.run_coroutine_threadsafe(
+                db.add_to_history(guild_id, state.current.webpage_url, state.current.title),
+                self.bot.loop
+            )
         
         # Handle loop mode
         if state.loop_mode == "song" and state.current:
