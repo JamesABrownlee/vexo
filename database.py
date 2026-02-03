@@ -68,12 +68,21 @@ class Database:
                 )
             ''')
 
+            # 5. Persistent Guild Settings
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id INTEGER,
+                    key TEXT,
+                    value TEXT,
+                    PRIMARY KEY (guild_id, key)
+                )
+            ''')
+
             # --- Robust Migration Logic ---
             tables = {
-                "playback_history": ["guild_id", "artist", "song", "url", "user_requesting"],
-                "user_preferences": ["user_id", "artist", "liked_song", "score", "url"],
                 "guild_autoplay_plist": ["guild_id", "artist", "song", "url"],
-                "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"]
+                "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"],
+                "guild_settings": ["guild_id", "key", "value"]
             }
 
             for table, expected_cols in tables.items():
@@ -172,6 +181,35 @@ class Database:
             ''', (guild_id,)) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
+
+    async def set_setting(self, guild_id: int, key: str, value: Any):
+        """Save a persistent setting for a guild."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''
+                INSERT INTO guild_settings (guild_id, key, value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value
+            ''', (guild_id, key, str(value)))
+            await db.commit()
+
+    async def get_settings(self, guild_id: int) -> Dict[str, Any]:
+        """Load all persistent settings for a guild."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('SELECT key, value FROM guild_settings WHERE guild_id = ?', (guild_id,)) as cursor:
+                rows = await cursor.fetchall()
+                settings = {}
+                for row in rows:
+                    key, val = row['key'], row['value']
+                    # Simple type conversion
+                    if val.lower() == 'true': val = True
+                    elif val.lower() == 'false': val = False
+                    elif val.isdigit(): val = int(val)
+                    else:
+                        try: val = float(val)
+                        except: pass
+                    settings[key] = val
+                return settings
 
 # Global instance
 db = Database()

@@ -45,6 +45,7 @@ class Song:
 @dataclass
 class GuildMusicState:
     """Music state for a guild."""
+    guild_id: int = 0  # Guild ID for this state
     queue: List[Song] = field(default_factory=list)  # User requested songs
     current: Optional[Song] = None
     loop_mode: str = "off"  # off, song, queue
@@ -68,6 +69,9 @@ class GuildMusicState:
     # Pre-fetching
     prefetched_source: Optional[Any] = None
     prefetched_song: Optional[Song] = None
+    
+    # Max duration filter (in seconds, 0 = no limit)
+    max_duration: int = 0
 
     @property
     def total_autoplay(self) -> List[Song]:
@@ -216,11 +220,23 @@ class Music(commands.Cog):
     def get_state(self, guild_id: int) -> GuildMusicState:
         """Get or create music state for guild."""
         if guild_id not in self.guild_states:
-            state = GuildMusicState()
-            # In the new system, we rely on dynamic permissions and defaults
-            # Persistence per guild is handled via current_session_plist if we wanted to restore,
-            # but for now we'll start fresh each session or load if needed.
+            state = GuildMusicState(guild_id)
             self.guild_states[guild_id] = state
+            
+            # Load persistent settings in the background
+            async def load_settings():
+                settings = await db.get_settings(guild_id)
+                if settings:
+                    # Update state with stored values
+                    state.volume = settings.get("volume", Config.DEFAULT_VOLUME * 100) / 100
+                    state.is_autoplay = settings.get("is_autoplay", True)
+                    state.is_24_7 = settings.get("is_24_7", False)
+                    state.is_channel_status = settings.get("is_channel_status", False)
+                    state.max_duration = settings.get("max_duration", 0)
+                    logger.info(f"Loaded persistent settings for guild {guild_id}: {settings}")
+            
+            asyncio.create_task(load_settings())
+            
         return self.guild_states[guild_id]
     
     @tasks.loop(seconds=10)
@@ -788,7 +804,7 @@ class Music(commands.Cog):
         state.loop_mode = mode
         
         # Persist setting
-        self.settings.set(interaction.guild.id, "loop_mode", mode)
+        asyncio.create_task(db.set_setting(interaction.guild.id, "loop_mode", mode))
         
         mode_display = {
             "off": "🚫 Loop disabled",
@@ -811,7 +827,7 @@ class Music(commands.Cog):
         state.text_channel = interaction.channel
         
         # Persist setting
-        self.settings.set(interaction.guild.id, "is_autoplay", state.is_autoplay)
+        asyncio.create_task(db.set_setting(interaction.guild.id, "is_autoplay", state.is_autoplay))
         
         if state.is_autoplay:
             # Start buffering immediately
@@ -869,12 +885,8 @@ class Music(commands.Cog):
             suggestion = None
             
             # Try to get a suggestion from autoplay buffer
-            # Try to get a suggestion from autoplay buffer
             if state.autoplay_visible:
                 suggestion = state.autoplay_visible[0]
-            # Or from history
-            elif state.history:
-                suggestion = list(state.history)[-1]
             
             embed = create_idle_embed(state, suggestion)
             view = NowPlayingView(self, interaction.guild.id)
@@ -885,8 +897,8 @@ class Music(commands.Cog):
         embed = create_now_playing_embed(state.current, state)
         
         # Add autoplay buffer info
-        if state.is_autoplay and state.autoplay_buffer:
-            next_up = state.autoplay_buffer[0]
+        if state.is_autoplay and state.autoplay_visible:
+            next_up = state.autoplay_visible[0]
             embed.add_field(
                 name="🎲 Autoplay Next",
                 value=f"{next_up.title[:40]}..." if len(next_up.title) > 40 else next_up.title,
@@ -917,7 +929,7 @@ class Music(commands.Cog):
         state.volume = level / 100
         
         # Persist setting
-        self.settings.set(interaction.guild.id, "volume", level)
+        asyncio.create_task(db.set_setting(interaction.guild.id, "volume", level))
         
         vc = interaction.guild.voice_client
         if vc and vc.source:
@@ -947,7 +959,7 @@ class Music(commands.Cog):
         state.is_24_7 = not state.is_24_7
         
         # Persist setting
-        self.settings.set(interaction.guild.id, "is_24_7", state.is_24_7)
+        asyncio.create_task(db.set_setting(interaction.guild.id, "is_24_7", state.is_24_7))
         
         if state.is_24_7:
             await interaction.response.send_message(
@@ -977,7 +989,7 @@ class Music(commands.Cog):
             state.original_channel_status = getattr(vc.channel, 'status', None)
             
             # Persist setting
-            self.settings.set(interaction.guild.id, "is_channel_status", True)
+            asyncio.create_task(db.set_setting(interaction.guild.id, "is_channel_status", True))
             
             # Immediately set status if something is playing
             if state.current:
@@ -1016,7 +1028,7 @@ class Music(commands.Cog):
             state.original_channel_status = None
             
             # Persist setting
-            self.settings.set(interaction.guild.id, "is_channel_status", False)
+            asyncio.create_task(db.set_setting(interaction.guild.id, "is_channel_status", False))
             
             await interaction.response.send_message(
                 embed=create_success_embed("🎶 **Channel Status Disabled**\nStatus cleared.")
@@ -1041,7 +1053,7 @@ class Music(commands.Cog):
         state.max_duration = minutes * 60  # Convert to seconds
         
         # Persist setting
-        self.settings.set(interaction.guild.id, "max_duration", state.max_duration)
+        asyncio.create_task(db.set_setting(interaction.guild.id, "max_duration", state.max_duration))
         
         if minutes == 0:
             await interaction.response.send_message(

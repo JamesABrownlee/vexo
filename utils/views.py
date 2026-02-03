@@ -507,9 +507,6 @@ class NowPlayingView(ui.View):
             # Check autoplay buffer first
             if state.autoplay_visible:
                 song_to_play = state.autoplay_visible.pop(0)
-            # Fall back to last played song from history
-            elif state.history:
-                song_to_play = list(state.history)[-1]
             
             if song_to_play:
                 # Play the suggested song
