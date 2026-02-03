@@ -113,6 +113,31 @@ class Database:
                         await db.execute("DROP TABLE user_preferences_old")
                         logger.info("Migration complete: user_preferences table recreated.")
             
+            # Special migration: Recreate guild_settings with proper PRIMARY KEY if needed
+            async with db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='guild_settings'") as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    create_sql = row[0] or ""
+                    # Check if the table has the composite primary key
+                    if "PRIMARY KEY" not in create_sql or "(guild_id, key)" not in create_sql.replace(" ", ""):
+                        logger.info("Migrating guild_settings: Recreating table with proper PRIMARY KEY...")
+                        await db.execute("ALTER TABLE guild_settings RENAME TO guild_settings_old")
+                        await db.execute('''
+                            CREATE TABLE guild_settings (
+                                guild_id INTEGER,
+                                key TEXT,
+                                value TEXT,
+                                PRIMARY KEY (guild_id, key)
+                            )
+                        ''')
+                        # Copy data (keep most recent value for duplicates)
+                        await db.execute('''
+                            INSERT OR REPLACE INTO guild_settings (guild_id, key, value)
+                            SELECT guild_id, key, value FROM guild_settings_old
+                        ''')
+                        await db.execute("DROP TABLE guild_settings_old")
+                        logger.info("Migration complete: guild_settings table recreated.")
+            
             tables = {
                 "guild_autoplay_plist": ["guild_id", "artist", "song", "url"],
                 "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"],
