@@ -79,6 +79,40 @@ class Database:
             ''')
 
             # --- Robust Migration Logic ---
+            
+            # Special migration: Recreate user_preferences with proper PRIMARY KEY if needed
+            # SQLite doesn't allow adding PRIMARY KEY constraints to existing tables
+            async with db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_preferences'") as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    create_sql = row[0] or ""
+                    # Check if the table has the composite primary key
+                    if "PRIMARY KEY" not in create_sql or "(user_id, url)" not in create_sql.replace(" ", ""):
+                        logger.info("Migrating user_preferences: Recreating table with proper PRIMARY KEY...")
+                        # Rename old table
+                        await db.execute("ALTER TABLE user_preferences RENAME TO user_preferences_old")
+                        # Create new table with proper schema
+                        await db.execute('''
+                            CREATE TABLE user_preferences (
+                                user_id INTEGER,
+                                artist TEXT,
+                                liked_song TEXT,
+                                score INTEGER,
+                                url TEXT,
+                                PRIMARY KEY (user_id, url)
+                            )
+                        ''')
+                        # Copy data (handling potential duplicates by aggregating scores)
+                        await db.execute('''
+                            INSERT INTO user_preferences (user_id, artist, liked_song, score, url)
+                            SELECT user_id, artist, liked_song, SUM(score), url
+                            FROM user_preferences_old
+                            GROUP BY user_id, url
+                        ''')
+                        # Drop old table
+                        await db.execute("DROP TABLE user_preferences_old")
+                        logger.info("Migration complete: user_preferences table recreated.")
+            
             tables = {
                 "guild_autoplay_plist": ["guild_id", "artist", "song", "url"],
                 "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"],
