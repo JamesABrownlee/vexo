@@ -4,7 +4,7 @@ Since you've pushed to GitHub and the CI/CD pipeline is building your image, the
 
 ## 1. Prerequisites
 - Ensure you have the **Docker Compose Manager** plugin installed from the CA (Community Applications) store.
-- Your GHCR image location: `ghcr.io/axiom3d-yt/vexo:latest`
+- Your GHCR image location: `ghcr.io/axiom3d-yt/vexo-bot:latest`
 
 ## 2. Setup on Unraid
 
@@ -16,7 +16,7 @@ Since you've pushed to GitHub and the CI/CD pipeline is building your image, the
 ```yaml
 services:
   vexo:
-    image: ghcr.io/axiom3d-yt/vexo:latest
+    image: ghcr.io/axiom3d-yt/vexo-bot:latest
     container_name: vexo
     restart: unless-stopped
     environment:
