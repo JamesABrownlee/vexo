@@ -376,8 +376,14 @@ class Music(commands.Cog):
             next_song = state.queue.pop(0)
             logger.info(f"Transition: Playing next USER REQUESTED song: '{next_song.title}'")
         elif state.is_autoplay:
-            if state.autoplay_visible:
-                next_song = state.autoplay_visible.pop(0)
+            # Find a song that passes the duration filter
+            while state.autoplay_visible and next_song is None:
+                candidate = state.autoplay_visible.pop(0)
+                # Check duration filter (skip if duration is known and exceeds limit)
+                if state.max_duration > 0 and candidate.duration > 0 and candidate.duration > state.max_duration:
+                    logger.info(f"Autoplay: Skipping '{candidate.title}' - duration {candidate.duration}s exceeds limit {state.max_duration}s")
+                    continue
+                next_song = candidate
                 logger.info(f"Transition: Playing next AUTOPLAY song: '{next_song.title}'")
                 
                 # Rotate hidden to visible
@@ -385,13 +391,20 @@ class Music(commands.Cog):
                     hidden_to_move = state.autoplay_hidden.pop(0)
                     state.autoplay_visible.append(hidden_to_move)
                     logger.debug(f"Queue Rotation: Moved '{hidden_to_move.title}' from hidden to visible.")
-            else:
-                logger.info("Transition: Autoplay buffer empty, triggering emergency refill.")
+            
+            if next_song is None:
+                logger.info("Transition: Autoplay buffer empty (or all filtered), triggering emergency refill.")
                 async def wait_and_play():
                     await self._refill_autoplay_buffer(guild_id)
-                    if state.autoplay_visible:
-                        s = state.autoplay_visible.pop(0)
-                        self._play_song(guild_id, s)
+                    # Try to find a valid song after refill
+                    song_to_play = None
+                    while state.autoplay_visible and song_to_play is None:
+                        c = state.autoplay_visible.pop(0)
+                        if state.max_duration > 0 and c.duration > 0 and c.duration > state.max_duration:
+                            continue
+                        song_to_play = c
+                    if song_to_play:
+                        self._play_song(guild_id, song_to_play)
                     elif not state.is_24_7 and state.voice_client:
                         await state.voice_client.disconnect()
                 
@@ -606,13 +619,26 @@ class Music(commands.Cog):
             # Try a mix of search terms
             fallbacks = ["trending songs 2026", "top spotify hits", "billboard hot 100"]
             for term in fallbacks:
-                trending_songs = await YTDLSource.search_by_artist(term, count=3)
+                trending_songs = await YTDLSource.search_by_artist(term, count=5)
                 if trending_songs:
-                    state.autoplay_visible.extend(trending_songs)
-                    break 
+                    # Filter by max_duration if set
+                    if state.max_duration > 0:
+                        trending_songs = [s for s in trending_songs if s.duration > 0 and s.duration <= state.max_duration]
+                    state.autoplay_visible.extend(trending_songs[:3])  # Take up to 3
+                    if state.autoplay_visible:
+                        break 
 
-        if state.autoplay_visible:
-            next_song = state.autoplay_visible.pop(0)
+        # Find a song that passes the duration filter
+        next_song = None
+        while state.autoplay_visible and next_song is None:
+            candidate = state.autoplay_visible.pop(0)
+            # Check duration filter (skip if duration is known and exceeds limit)
+            if state.max_duration > 0 and candidate.duration > 0 and candidate.duration > state.max_duration:
+                logger.info(f"Skipping '{candidate.title}' - duration {candidate.duration}s exceeds limit {state.max_duration}s")
+                continue
+            next_song = candidate
+        
+        if next_song:
             self._play_song(interaction.guild.id, next_song)
             await interaction.followup.send(
                 embed=create_success_embed("🎶 **Vexo Discovery Started!**\nPlaying songs based on your vibe (or trending hits).")
