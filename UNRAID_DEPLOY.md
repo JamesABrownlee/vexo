@@ -20,9 +20,9 @@ services:
     container_name: vexo
     restart: unless-stopped
     environment:
-      - DISCORD_TOKEN=your_discord_token_here
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
       - DEFAULT_VOLUME=50
-      - YTDL_PO_TOKEN=your_po_token_here
+      - YTDL_PO_TOKEN=${YTDL_PO_TOKEN}
       - DATABASE_PATH=/app/data/vexo.db
       # Optional: if you upload cookies.txt to your appdata folder
       - YTDL_COOKIES_PATH=/app/data/cookies.txt
