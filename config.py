@@ -56,8 +56,15 @@ class Config:
     }
     
     FFMPEG_OPTIONS = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn'
+        'before_options': (
+            '-reconnect 1 '
+            '-reconnect_streamed 1 '
+            '-reconnect_delay_max 5 '
+            '-analyzeduration 10000000 '  # 10 seconds of analysis
+            '-probesize 10000000 '        # 10MB probe size
+            '-fflags +discardcorrupt '    # Discard corrupt packets
+        ),
+        'options': '-vn -bufsize 64k'     # 64kb buffer, no video
     }
     
     @classmethod
