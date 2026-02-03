@@ -119,7 +119,7 @@ class MusicControlView(ui.View):
     
     @ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
     async def stop_button(self, interaction: discord.Interaction, button: ui.Button):
-        """Stop playback and clear queue."""
+        """Stop playback and clear session queues."""
         if not await self._check_voice(interaction):
             return
         
@@ -127,14 +127,15 @@ class MusicControlView(ui.View):
         vc = interaction.guild.voice_client
         
         state.queue.clear()
-        state.autoplay_buffer.clear()
+        state.autoplay_visible.clear()
+        state.autoplay_hidden.clear()
         state.current = None
         state.loop_mode = "off"
         
         if vc.is_playing() or vc.is_paused():
             vc.stop()
         
-        await interaction.response.send_message("⏹️ Stopped playback and cleared queue.", ephemeral=True)
+        await interaction.response.send_message("⏹️ Stopped playback and cleared session queues.", ephemeral=True)
     
     @ui.button(emoji="🔀", style=discord.ButtonStyle.secondary, row=0)
     async def shuffle_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -242,9 +243,9 @@ class AutoplayPreviewView(ui.View):
         return self.cog.get_state(self.guild_id)
     
     def _build_buttons(self):
-        """Build jump buttons based on current buffer."""
+        """Build jump buttons based on current visible buffer."""
         state = self._get_state()
-        buffer = state.autoplay_buffer[:5]
+        buffer = state.autoplay_visible[:5]
         
         # Number emojis for buttons
         number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
@@ -304,7 +305,7 @@ class AutoplayPreviewView(ui.View):
         
         state = self._get_state()
         
-        if index >= len(state.autoplay_buffer):
+        if index >= len(state.autoplay_visible):
             await interaction.response.send_message(
                 "❌ That song is no longer in the buffer!", 
                 ephemeral=True
@@ -312,15 +313,15 @@ class AutoplayPreviewView(ui.View):
             return
         
         # Get the target song
-        target_song = state.autoplay_buffer[index]
+        target_song = state.autoplay_visible[index]
         
-        # Remove songs before the target (they get skipped)
-        state.autoplay_buffer = state.autoplay_buffer[index:]
+        # Slice the visible buffer to the target
+        state.autoplay_visible = state.autoplay_visible[index:]
         
         # Clear any current queue items
         state.queue.clear()
         
-        # Stop current playback - this will trigger play_next which uses the buffer
+        # Stop current playback
         vc = interaction.guild.voice_client
         if vc and (vc.is_playing() or vc.is_paused()):
             vc.stop()
@@ -335,9 +336,9 @@ class AutoplayPreviewView(ui.View):
         from utils.embeds import create_upcoming_autoplay_embed
         
         state = self._get_state()
-        embed = create_upcoming_autoplay_embed(state.autoplay_buffer[:5])
+        embed = create_upcoming_autoplay_embed(state.autoplay_visible)
         
-        # Rebuild the view with current buffer
+        # Rebuild the view
         new_view = AutoplayPreviewView(self.cog, self.guild_id)
         
         await interaction.response.edit_message(embed=embed, view=new_view)
@@ -423,10 +424,10 @@ class NowPlayingView(ui.View):
         self.add_item(autoplay)
         
         # Show upcoming (only if autoplay is on)
-        if state.is_autoplay and state.autoplay_buffer:
+        if state.is_autoplay and state.autoplay_visible:
             upcoming = ui.Button(
                 emoji="📋", 
-                label=f"Upcoming ({len(state.autoplay_buffer)})",
+                label=f"Upcoming ({len(state.autoplay_visible)})",
                 style=discord.ButtonStyle.primary, 
                 custom_id="upcoming", 
                 row=1
@@ -535,8 +536,13 @@ class NowPlayingView(ui.View):
             
             # Record skip interaction
             if state.current:
-                discovery_engine.set_interactor(self.guild_id, interaction.user.id)
-                await discovery_engine.record_interaction(interaction.user.id, state.current.webpage_url, "skip")
+                await discovery_engine.record_interaction(
+                    interaction.user.id,
+                    state.current.author,
+                    state.current.title,
+                    state.current.webpage_url,
+                    "skip"
+                )
                 
             vc.stop()
             await interaction.response.send_message(f"⏭️ **{interaction.user.display_name}** skipped: **{title}**")
@@ -586,9 +592,6 @@ class NowPlayingView(ui.View):
         current_idx = modes.index(state.loop_mode)
         state.loop_mode = modes[(current_idx + 1) % len(modes)]
         
-        # Persist setting
-        self.cog.settings.set(self.guild_id, "loop_mode", state.loop_mode)
-        
         messages = {
             "off": "🚫 Loop disabled",
             "song": "🔂 Looping current song",
@@ -635,16 +638,14 @@ class NowPlayingView(ui.View):
         state.is_autoplay = not state.is_autoplay
         state.text_channel = interaction.channel
         
-        # Persist setting
-        self.cog.settings.set(self.guild_id, "is_autoplay", state.is_autoplay)
-        
         if state.is_autoplay:
             # Trigger buffer refill
             asyncio.create_task(self.cog._refill_autoplay_buffer(self.guild_id))
             await interaction.response.send_message(f"🎲 Autoplay **enabled** by **{interaction.user.display_name}**!")
         else:
-            state.autoplay_buffer.clear()
-            await interaction.response.send_message(f"🎲 Autoplay **disabled** by **{interaction.user.display_name}**.")
+            state.autoplay_visible.clear()
+            state.autoplay_hidden.clear()
+            await interaction.response.send_message(f"🎲 Autoplay **disabled** by **{interaction.user.display_name}** (Queues cleared).")
     
     async def _upcoming_callback(self, interaction: discord.Interaction):
         """Show upcoming autoplay songs with jump buttons."""
@@ -652,14 +653,14 @@ class NowPlayingView(ui.View):
         
         state = self._get_state()
         
-        if not state.autoplay_buffer:
+        if not state.autoplay_visible:
             await interaction.response.send_message(
                 "❌ No songs in autoplay buffer! Enable autoplay first.",
                 ephemeral=True
             )
             return
         
-        embed = create_upcoming_autoplay_embed(state.autoplay_buffer[:5])
+        embed = create_upcoming_autoplay_embed(state.autoplay_visible)
         view = AutoplayPreviewView(self.cog, self.guild_id)
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -670,8 +671,13 @@ class NowPlayingView(ui.View):
         if not state.current:
             return await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
             
-        discovery_engine.set_interactor(self.guild_id, interaction.user.id)
-        await discovery_engine.record_interaction(interaction.user.id, state.current.webpage_url, "upvote")
+        await discovery_engine.record_interaction(
+            interaction.user.id, 
+            state.current.author, 
+            state.current.title, 
+            state.current.webpage_url, 
+            "upvote"
+        )
         await interaction.response.send_message(f"👍 **{interaction.user.display_name}** liked this song!", ephemeral=True)
 
     async def _downvote_callback(self, interaction: discord.Interaction):
@@ -680,6 +686,11 @@ class NowPlayingView(ui.View):
         if not state.current:
             return await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
             
-        discovery_engine.set_interactor(self.guild_id, interaction.user.id)
-        await discovery_engine.record_interaction(interaction.user.id, state.current.webpage_url, "downvote")
+        await discovery_engine.record_interaction(
+            interaction.user.id, 
+            state.current.author, 
+            state.current.title, 
+            state.current.webpage_url, 
+            "downvote"
+        )
         await interaction.response.send_message(f"👎 **{interaction.user.display_name}** disliked this song!", ephemeral=True)

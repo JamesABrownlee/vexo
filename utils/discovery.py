@@ -1,6 +1,6 @@
 import logging
 import random
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from database import db
 from config import Config
 
@@ -16,45 +16,108 @@ class DiscoveryEngine:
         """Set the last person who interacted with the bot in this guild."""
         self.session_interactors[guild_id] = discord_id
 
-    async def get_next_songs(self, guild_id: int, vc_user_ids: List[int], count: int = 5) -> List[str]:
+    async def get_next_songs(self, guild_id: int, vc_user_ids: List[int], count: int = 10) -> List[Dict[str, Any]]:
         """
         Calculate the next songs to play based on users in the voice channel.
-        This is a placeholder for a more complex recommendation algorithm.
-        For now, it will return a list of 'favored' track IDs or search queries.
+        Returns a list of track dicts with artist, song, and url.
         """
-        # 1. Aggregate preferences of all users in VC
-        aggregated_preferences: Dict[str, float] = {}
+        logger.info(f"--- Discovery Engine Run (Guild: {guild_id}) ---")
+        logger.info(f"Analyzing preferences for users: {vc_user_ids}")
         
-        last_interactor = self.session_interactors.get(guild_id)
-        
+        # 1. Aggregate all user preferences
+        all_user_prefs = []
         for user_id in vc_user_ids:
-            user_prefs = await db.get_user_preferences(user_id)
-            
-            # Apply interactor influence multiplier
-            multiplier = Config.DISCOVERY_INTERACTOR_INFLUENCE if user_id == last_interactor else 1.0
-            
-            for track_id, score in user_prefs.items():
-                aggregated_preferences[track_id] = aggregated_preferences.get(track_id, 0) + (score * multiplier)
+            prefs = await db.get_user_preferences(user_id)
+            all_user_prefs.extend(prefs)
+            logger.debug(f"User {user_id} has {len(prefs)} preference entries.")
 
-        # 2. Filter out recently played songs
-        recent_history = await db.get_recent_history(guild_id, limit=100)
-        for track_id in recent_history:
-            if track_id in aggregated_preferences:
-                # Heavily penalize recently played songs instead of outright removal to allow 
-                # highly requested ones if there are no other options, or just remove them.
-                del aggregated_preferences[track_id]
+        # 2. Get the global autoplay pool
+        pool = await db.get_autoplay_pool(guild_id)
+        logger.info(f"Global pool size: {len(pool)} tracks.")
 
-        # 3. Sort by score
-        recommended = sorted(aggregated_preferences.items(), key=lambda x: x[1], reverse=True)
+        # 3. Score each track in the pool
+        scored_tracks = []
         
-        # 4. Return top N track IDs
-        results = [track_id for track_id, score in recommended[:count]]
-        
-        # If we don't have enough recommendations, we might need to fallback to 
-        # general 'popular' songs or related artists (this would need external API or larger DB)
-        return results
+        # Build a map of liked artists and songs for fast lookup
+        liked_artists = {}
+        liked_urls = {}
+        for pref in all_user_prefs:
+            url = pref['url']
+            artist = pref.get('artist', '').lower()
+            score = pref['score']
+            
+            liked_urls[url] = max(liked_urls.get(url, 0), score)
+            if artist:
+                liked_artists[artist] = max(liked_artists.get(artist, 0), score)
 
-    async def record_interaction(self, discord_id: int, track_id: str, interaction_type: str):
+        for track in pool:
+            url = track['url']
+            artist = track.get('artist', '').lower()
+            
+            # Enforce 120-minute lockout
+            if await db.is_recently_played(guild_id, url, minutes=120):
+                logger.debug(f"Skipping '{track['song']}' - Played within last 120m.")
+                continue
+
+            score = 0
+            reasons = []
+
+            # Rule 1: Direct Like (+10)
+            if url in liked_urls:
+                bonus = 10 if liked_urls[url] > 0 else -10
+                score += bonus
+                reasons.append(f"Direct Like ({bonus})")
+
+            # Rule 2: Artist Affinity (+5)
+            if artist in liked_artists:
+                bonus = 5 if liked_artists[artist] > 0 else -5
+                score += bonus
+                reasons.append(f"Artist Affinity ({bonus})")
+
+            # Rule 3: Random Factor (+1 to +3)
+            random_bonus = random.randint(1, 3)
+            score += random_bonus
+            # reasons.append(f"Organic Variance (+{random_bonus})")
+
+            scored_tracks.append({
+                "track": track,
+                "score": score,
+                "reasons": reasons
+            })
+
+        # 4. Sort and select top tracks
+        scored_tracks.sort(key=lambda x: x['score'], reverse=True)
+        
+        selection = []
+        for item in scored_tracks[:count]:
+            selection.append(item['track'])
+            logger.info(f"Selected: '{item['track']['song']}' by {item['track']['artist']} (Score: {item['score']}, Factors: {', '.join(item['reasons'])})")
+
+        if not selection:
+            logger.warning("Discovery Engine found 0 matches in pool. This usually happens if the pool is empty or history lockout is full.")
+            
+        return selection
+
+    async def get_mood_recommendation(self, guild_id: int, seed_song_title: str, artist: str) -> Optional[Dict[str, Any]]:
+        """Find a song similar to the seed song."""
+        logger.info(f"Mood Search: Finding tracks similar to '{seed_song_title}' by {artist}")
+        
+        pool = await db.get_autoplay_pool(guild_id)
+        # Simple keyword matching for now - can be expanded to external APIs
+        matches = [t for t in pool if t['artist'].lower() == artist.lower() or any(word in t['song'].lower() for word in seed_song_title.lower().split())]
+        
+        # Filter out recently played
+        matches = [t for t in matches if not await db.is_recently_played(guild_id, t['url'])]
+
+        if matches:
+            chosen = random.choice(matches)
+            logger.info(f"Mood Result: Selected '{chosen['song']}' as a similar vibe.")
+            return chosen
+        
+        logger.info("Mood Result: No similar tracks found in pool.")
+        return None
+
+    async def record_interaction(self, user_id: int, artist: str, song_title: str, url: str, interaction_type: str):
         """Record an interaction and update score."""
         weights = {
             "upvote": Config.DISCOVERY_WEIGHT_UPVOTE,
@@ -65,8 +128,10 @@ class DiscoveryEngine:
         
         delta = weights.get(interaction_type, 0)
         if delta != 0:
-            await db.update_user_preference(discord_id, track_id, delta)
-            logger.info(f"Recorded {interaction_type} for user {discord_id} on track {track_id}: {delta}")
+            logger.info(f"Interaction: {interaction_type} by {user_id} for '{song_title}' (Delta: {delta})")
+            await db.update_user_preference(user_id, song_title, url, delta)
+            # Also ensure it's in the global autoplay pool for future discovery
+            await db.add_to_autoplay_pool(0, artist, song_title, url) # 0 for global or specific guild
 
 # Global instance
 discovery_engine = DiscoveryEngine()

@@ -1,6 +1,8 @@
-# Vexo - Smart Discord Music Bot
+# 🧠 Vexo - The Smart Discord Music Bot
 
-Vexo is a self-hosted Discord music bot with a focus on intelligent discovery, gapless playback, and user-driven recommendations.
+Vexo is a self-hosted Discord music bot built for communities that care about the vibe. Beyond simple playback, Vexo features an intelligent **Discovery Engine** that learns and adapts to your server's unique music taste using a weighted preference system.
+
+Through session-aware logic and proactive song buffering, Vexo ensures your music sessions are smooth, tailored, and always evolving.
 
 ## Core Features
 - 🧠 **Vexo Discovery Engine**: Highly weighted recommendation system (+5 for 👍, -5 for 👎, -2 for skips).

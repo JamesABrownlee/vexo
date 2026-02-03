@@ -3,7 +3,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger('Vexo.Database')
 
@@ -15,112 +15,140 @@ class Database:
         
     async def initialize(self):
         """Initialize the database schema."""
+        # Ensure data directory exists
+        Path("data").mkdir(exist_ok=True)
+        
         async with aiosqlite.connect(self.db_path) as db:
-            # User Preferences: tracking likes/dislikes
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS user_preferences (
-                    discord_id INTEGER,
-                    track_id TEXT,
-                    score INTEGER DEFAULT 0,
-                    last_interaction TIMESTAMP,
-                    PRIMARY KEY (discord_id, track_id)
-                )
-            ''')
-            
-            # Playback History: for avoiding duplicates
+            # 1. Playback History
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS playback_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     guild_id INTEGER,
-                    track_id TEXT,
-                    track_title TEXT,
+                    artist TEXT,
+                    song TEXT,
+                    url TEXT,
+                    user_requesting INTEGER,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # Guild Settings: owner/admin and bot settings
+            # 2. User Preferences
             await db.execute('''
-                CREATE TABLE IF NOT EXISTS guild_settings (
-                    guild_id INTEGER PRIMARY KEY,
-                    owner_id INTEGER,
-                    admin_role_id INTEGER,
-                    settings_json TEXT
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    user_id INTEGER,
+                    liked_song TEXT,
+                    score INTEGER,
+                    url TEXT,
+                    PRIMARY KEY (user_id, url)
+                )
+            ''')
+            
+            # 3. Guild Autoplay Pool
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS guild_autoplay_plist (
+                    guild_id INTEGER,
+                    artist TEXT,
+                    song TEXT,
+                    url TEXT,
+                    PRIMARY KEY (guild_id, url)
+                )
+            ''')
+            
+            # 4. Current Session Playlist
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS current_session_plist (
+                    guild_id INTEGER,
+                    type TEXT, -- 'requested', 'autoplay_visible', 'autoplay_hidden'
+                    position INTEGER,
+                    artist TEXT,
+                    song TEXT,
+                    url TEXT,
+                    user_id INTEGER,
+                    PRIMARY KEY (guild_id, type, position)
                 )
             ''')
             
             await db.commit()
-            logger.info("Database initialized.")
+            logger.info("Database initialized with new schema.")
 
-    async def update_user_preference(self, discord_id: int, track_id: str, delta: int):
-        """Update a user's preference score for a track."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                INSERT INTO user_preferences (discord_id, track_id, score, last_interaction)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(discord_id, track_id) DO UPDATE SET
-                    score = score + excluded.score,
-                    last_interaction = excluded.last_interaction
-            ''', (discord_id, track_id, delta, datetime.now()))
-            await db.commit()
-
-    async def add_to_history(self, guild_id: int, track_id: str, track_title: str):
+    async def add_to_history(self, guild_id: int, artist: str, song: str, url: str, user_id: Optional[int] = None):
         """Record a played track in history."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
-                INSERT INTO playback_history (guild_id, track_id, track_title)
-                VALUES (?, ?, ?)
-            ''', (guild_id, track_id, track_title))
+                INSERT INTO playback_history (guild_id, artist, song, url, user_requesting)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (guild_id, artist, song, url, user_id))
             await db.commit()
 
-    async def get_recent_history(self, guild_id: int, limit: int = 50) -> List[str]:
-        """Get recently played track IDs to avoid duplicates."""
+    async def is_recently_played(self, guild_id: int, url: str, minutes: int = 120) -> bool:
+        """Check if a song was played in the last N minutes."""
         async with aiosqlite.connect(self.db_path) as db:
+            cutoff = (datetime.now() - timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S')
             async with db.execute('''
-                SELECT track_id FROM playback_history 
-                WHERE guild_id = ? 
-                ORDER BY timestamp DESC LIMIT ?
-            ''', (guild_id, limit)) as cursor:
-                rows = await cursor.fetchall()
-                return [row[0] for row in rows]
+                SELECT 1 FROM playback_history 
+                WHERE guild_id = ? AND url = ? AND timestamp > ?
+                LIMIT 1
+            ''', (guild_id, url, cutoff)) as cursor:
+                return await cursor.fetchone() is not None
 
-    async def get_user_preferences(self, discord_id: int) -> Dict[str, int]:
+    async def update_user_preference(self, user_id: int, song_title: str, url: str, delta: int):
+        """Update a user's preference score."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''
+                INSERT INTO user_preferences (user_id, liked_song, score, url)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, url) DO UPDATE SET
+                    score = score + excluded.score
+            ''', (user_id, song_title, delta, url))
+            await db.commit()
+
+    async def get_user_preferences(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all preferences for a user."""
         async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute('''
-                SELECT track_id, score FROM user_preferences WHERE discord_id = ?
-            ''', (discord_id,)) as cursor:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('SELECT * FROM user_preferences WHERE user_id = ?', (user_id,)) as cursor:
                 rows = await cursor.fetchall()
-                return {row[0]: row[1] for row in rows}
+                return [dict(row) for row in rows]
 
-    async def get_guild_settings(self, guild_id: int) -> Dict[str, Any]:
-        """Get settings for a guild."""
+    async def add_to_autoplay_pool(self, guild_id: int, artist: str, song: str, url: str):
+        """Add a song to the guild's autoplay pool."""
         async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute('''
-                SELECT owner_id, admin_role_id, settings_json FROM guild_settings WHERE guild_id = ?
-            ''', (guild_id,)) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    return {
-                        "owner_id": row[0],
-                        "admin_role_id": row[1],
-                        "settings": json.loads(row[2]) if row[2] else {}
-                    }
-                return {}
-
-    async def set_guild_settings(self, guild_id: int, owner_id: Optional[int] = None, 
-                                 admin_role_id: Optional[int] = None, settings: Optional[Dict[str, Any]] = None):
-        """Update guild settings."""
-        async with aiosqlite.connect(self.db_path) as db:
-            settings_json = json.dumps(settings) if settings is not None else None
             await db.execute('''
-                INSERT INTO guild_settings (guild_id, owner_id, admin_role_id, settings_json)
+                INSERT OR IGNORE INTO guild_autoplay_plist (guild_id, artist, song, url)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(guild_id) DO UPDATE SET
-                    owner_id = COALESCE(excluded.owner_id, guild_settings.owner_id),
-                    admin_role_id = COALESCE(excluded.admin_role_id, guild_settings.admin_role_id),
-                    settings_json = COALESCE(excluded.settings_json, guild_settings.settings_json)
-            ''', (guild_id, owner_id, admin_role_id, settings_json))
+            ''', (guild_id, artist, song, url))
             await db.commit()
+
+    async def get_autoplay_pool(self, guild_id: int) -> List[Dict[str, Any]]:
+        """Get the autoplay pool for a guild."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('SELECT * FROM guild_autoplay_plist WHERE guild_id = ?', (guild_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def save_session_plist(self, guild_id: int, playlist: List[Dict[str, Any]]):
+        """Save the current session playlist to DB."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('DELETE FROM current_session_plist WHERE guild_id = ?', (guild_id,))
+            for i, item in enumerate(playlist):
+                await db.execute('''
+                    INSERT INTO current_session_plist (guild_id, type, position, artist, song, url, user_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (guild_id, item['type'], i, item.get('artist'), item.get('song'), item.get('url'), item.get('user_id')))
+            await db.commit()
+
+    async def load_session_plist(self, guild_id: int) -> List[Dict[str, Any]]:
+        """Load the current session playlist from DB."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('''
+                SELECT * FROM current_session_plist 
+                WHERE guild_id = ? 
+                ORDER BY position ASC
+            ''', (guild_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
 
 # Global instance
 db = Database()

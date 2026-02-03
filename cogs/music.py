@@ -45,35 +45,33 @@ class Song:
 @dataclass
 class GuildMusicState:
     """Music state for a guild."""
-    queue: List[Song] = field(default_factory=list)
+    queue: List[Song] = field(default_factory=list)  # User requested songs
     current: Optional[Song] = None
     loop_mode: str = "off"  # off, song, queue
     is_24_7: bool = False
-    is_autoplay: bool = False
+    is_autoplay: bool = True  # Always on by default in Vexo Smart
     volume: float = Config.DEFAULT_VOLUME
     voice_client: Optional[discord.VoiceClient] = None
-    history: deque = field(default_factory=lambda: deque(maxlen=15))  # Increased for better diversity
     text_channel: Optional[discord.TextChannel] = None
     
-    # Enhanced autoplay
-    autoplay_buffer: List[Song] = field(default_factory=list)  # Pre-computed upcoming songs
-    favorite_artists: Set[str] = field(default_factory=set)  # User's favorite artists
-    recently_used_artists: deque = field(default_factory=lambda: deque(maxlen=5))  # Track artist usage
-    is_fetching_autoplay: bool = False  # Prevent concurrent fetches
+    # Enhanced autoplay (10 songs total: 5 visible, 5 hidden)
+    autoplay_visible: List[Song] = field(default_factory=list)
+    autoplay_hidden: List[Song] = field(default_factory=list)
+    is_fetching_autoplay: bool = False
     
     # Channel status feature
-    is_channel_status: bool = False  # Toggle for channel status updates
-    original_channel_status: Optional[str] = None  # Store original status to restore later
+    is_channel_status: bool = False
     
-    # Now playing message tracking (for auto-update)
-    now_playing_message: Optional[discord.Message] = None  # Current now playing message to delete/update
-    
-    # Max duration filter for autoplay (in seconds, default 5 minutes)
-    max_duration: int = 300  
+    # Now playing message tracking
+    now_playing_message: Optional[discord.Message] = None
     
     # Pre-fetching
-    prefetched_source: Optional[Any] = None  # Holds the prefetched YTDLSource
-    prefetched_song: Optional[Song] = None  # Which song is currently prefetched
+    prefetched_source: Optional[Any] = None
+    prefetched_song: Optional[Song] = None
+
+    @property
+    def total_autoplay(self) -> List[Song]:
+        return self.autoplay_visible + self.autoplay_hidden
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -207,29 +205,18 @@ class Music(commands.Cog):
         asyncio.create_task(db.initialize())
         
         self.autoplay_refill_task.start()
-        
-        # Import settings manager
-        from utils.settings import settings_manager
-        self.settings = settings_manager
+        logger.info("Vexo Music Cog Initialized.")
     
     def cog_unload(self):
         self.autoplay_refill_task.cancel()
     
     def get_state(self, guild_id: int) -> GuildMusicState:
-        """Get or create music state for guild, loading persistent settings."""
+        """Get or create music state for guild."""
         if guild_id not in self.guild_states:
             state = GuildMusicState()
-            
-            # Load persistent settings
-            saved = self.settings.get_guild_settings(guild_id)
-            state.volume = saved["volume"] / 100  # Convert to 0.0-1.0
-            state.max_duration = saved["max_duration"]
-            state.is_24_7 = saved["is_24_7"]
-            state.is_channel_status = saved["is_channel_status"]
-            state.favorite_artists = set(saved["favorite_artists"])
-            state.is_autoplay = saved["is_autoplay"]
-            state.loop_mode = saved["loop_mode"]
-            
+            # In the new system, we rely on dynamic permissions and defaults
+            # Persistence per guild is handled via current_session_plist if we wanted to restore,
+            # but for now we'll start fresh each session or load if needed.
             self.guild_states[guild_id] = state
         return self.guild_states[guild_id]
     
@@ -238,8 +225,8 @@ class Music(commands.Cog):
         """Background task to keep autoplay buffers filled."""
         for guild_id, state in self.guild_states.items():
             if state.is_autoplay and not state.is_fetching_autoplay:
-                # Keep buffer at 5 songs
-                if len(state.autoplay_buffer) < 5:
+                # Keep total buffer (visible + hidden) at 10 songs
+                if len(state.total_autoplay) < 10:
                     await self._refill_autoplay_buffer(guild_id)
     
     @autoplay_refill_task.before_loop
@@ -247,47 +234,50 @@ class Music(commands.Cog):
         await self.bot.wait_until_ready()
     
     async def _refill_autoplay_buffer(self, guild_id: int):
-        """Refill the autoplay buffer using the Vexo Discovery Engine."""
+        """Refill the visible and hidden autoplay queues."""
         state = self.get_state(guild_id)
-        
         if state.is_fetching_autoplay or not state.voice_client:
             return
         
         state.is_fetching_autoplay = True
+        logger.info(f"Refilling Autoplay Queues for Guild {guild_id}...")
         
         try:
-            songs_needed = 5 - len(state.autoplay_buffer)
-            if songs_needed <= 0:
+            total_needed = 10 - len(state.total_autoplay)
+            if total_needed <= 0:
                 return
-            
-            # Get members in the same voice channel
+
             vc = state.voice_client.channel
-            if not vc:
-                return
-                
             member_ids = [m.id for m in vc.members if not m.bot]
-            if not member_ids:
-                return # No human users, don't waste resources refilling
-
-            # Get recommendations from discovery engine
-            recommended_queries = await discovery_engine.get_next_songs(guild_id, member_ids, count=songs_needed)
             
-            # If discovery engine has no specific recommendations, use favorites as fallback
-            if not recommended_queries and state.favorite_artists:
-                recommended_queries = random.sample(list(state.favorite_artists), min(len(state.favorite_artists), songs_needed))
+            # 1. Get recommendations
+            recommendations = await discovery_engine.get_next_songs(guild_id, member_ids, count=total_needed)
+            
+            # 2. Convert to Song objects
+            for track in recommendations:
+                song = Song(
+                    title=track['song'],
+                    url=track['url'],
+                    webpage_url=track['url'],
+                    duration=0, # Discovery pool should ideally store duration too
+                    thumbnail=None,
+                    author=track['artist']
+                )
+                
+                # Check for duplicates in current session
+                if any(s.url == song.url for s in state.queue + state.total_autoplay):
+                    continue
+                
+                # Fill balance: first to visible until 5, then hidden
+                if len(state.autoplay_visible) < 5:
+                    state.autoplay_visible.append(song)
+                else:
+                    state.autoplay_hidden.append(song)
+            
+            logger.info(f"Refill Complete: Visible={len(state.autoplay_visible)}, Hidden={len(state.autoplay_hidden)}")
 
-            for query in recommended_queries:
-                song = await YTDLSource.search(query, loop=self.bot.loop)
-                if song:
-                    # Check if already in buffer or history
-                    if any(s.webpage_url == song.webpage_url for s in state.autoplay_buffer):
-                        continue
-                    
-                    state.autoplay_buffer.append(song)
-                    logger.info(f"Vexo Discovery: Added '{song.title}' to buffer for guild {guild_id}")
-                    
         except Exception as e:
-            logger.error(f"Error refilling autoplay buffer (Discovery): {e}")
+            logger.error(f"Error in discovery refill: {e}")
         finally:
             state.is_fetching_autoplay = False
     
@@ -339,21 +329,20 @@ class Music(commands.Cog):
             return vc
     
     def play_next(self, guild_id: int, error=None):
-        """Play the next song in queue."""
+        """Play the next song in the session playlist."""
         state = self.get_state(guild_id)
         
         if error:
-            print(f"Player error: {error}")
+            logger.error(f"Player error in guild {guild_id}: {error}")
         
-        # Add current song to history in DB - must use threadsafe since 'after' runs in a separate thread
+        # 1. Record History
         if state.current:
-            state.history.append(state.current)
             asyncio.run_coroutine_threadsafe(
-                db.add_to_history(guild_id, state.current.webpage_url, state.current.title),
+                db.add_to_history(guild_id, state.current.author, state.current.title, state.current.url),
                 self.bot.loop
             )
         
-        # Handle loop mode
+        # 2. Check loop modes
         if state.loop_mode == "song" and state.current:
             self._play_song(guild_id, state.current)
             return
@@ -361,40 +350,42 @@ class Music(commands.Cog):
         if state.loop_mode == "queue" and state.current:
             state.queue.append(state.current)
         
-        if not state.queue:
-            # Queue is empty - use autoplay buffer
-            if state.is_autoplay and state.autoplay_buffer:
-                next_song = state.autoplay_buffer.pop(0)
-                self._play_song(guild_id, next_song)
-                return
-            
-            # Autoplay is on but buffer is empty - try to refill and wait
-            if state.is_autoplay and state.history:
-                # Trigger immediate refill and wait a bit
-                async def wait_for_autoplay():
+        # 3. Get next song
+        next_song = None
+        
+        if state.queue:
+            next_song = state.queue.pop(0)
+            logger.info(f"Transition: Playing next USER REQUESTED song: '{next_song.title}'")
+        elif state.is_autoplay:
+            if state.autoplay_visible:
+                next_song = state.autoplay_visible.pop(0)
+                logger.info(f"Transition: Playing next AUTOPLAY song: '{next_song.title}'")
+                
+                # Rotate hidden to visible
+                if state.autoplay_hidden:
+                    hidden_to_move = state.autoplay_hidden.pop(0)
+                    state.autoplay_visible.append(hidden_to_move)
+                    logger.debug(f"Queue Rotation: Moved '{hidden_to_move.title}' from hidden to visible.")
+            else:
+                logger.info("Transition: Autoplay buffer empty, triggering emergency refill.")
+                async def wait_and_play():
                     await self._refill_autoplay_buffer(guild_id)
-                    # Check again after refill
-                    if state.autoplay_buffer:
-                        next_song = state.autoplay_buffer.pop(0)
-                        self._play_song(guild_id, next_song)
+                    if state.autoplay_visible:
+                        s = state.autoplay_visible.pop(0)
+                        self._play_song(guild_id, s)
                     elif not state.is_24_7 and state.voice_client:
-                        # Still no songs, disconnect
                         await state.voice_client.disconnect()
                 
-                asyncio.run_coroutine_threadsafe(wait_for_autoplay(), self.bot.loop)
+                asyncio.run_coroutine_threadsafe(wait_and_play(), self.bot.loop)
                 return
-            
+
+        if next_song:
+            self._play_song(guild_id, next_song)
+        else:
             state.current = None
             if not state.is_24_7 and state.voice_client:
-                asyncio.run_coroutine_threadsafe(
-                    state.voice_client.disconnect(),
-                    self.bot.loop
-                )
-            return
-        
-        # Get next song from queue
-        next_song = state.queue.pop(0)
-        self._play_song(guild_id, next_song)
+                asyncio.run_coroutine_threadsafe(state.voice_client.disconnect(), self.bot.loop)
+                logger.info(f"Session End: Disconnected from guild {guild_id} (Queue empty and legacy autoplay off).")
     
     async def _update_now_playing_message(self, guild_id: int):
         """Delete old now playing message and post a new one with current song."""
@@ -443,23 +434,16 @@ class Music(commands.Cog):
                     channel = state.voice_client.channel
                     if channel:
                         status_text = f"🎶 {song.title[:100]}"
-                        try:
-                            await channel.edit(status=status_text)
+                        try: await channel.edit(status=status_text)
                         except: pass
 
-                # 2. Get the source (use prefetched if it matches)
-                if state.prefetched_source and state.prefetched_song and state.prefetched_song.webpage_url == song.webpage_url:
-                    source = state.prefetched_source
-                    state.prefetched_source = None
-                    state.prefetched_song = None
-                    logger.info(f"Using prefetched source for '{song.title}'")
-                else:
-                    source = await YTDLSource.from_url(
-                        song.webpage_url,
-                        loop=self.bot.loop,
-                        stream=True,
-                        volume=state.volume
-                    )
+                # 2. Get Source
+                source = await YTDLSource.from_url(
+                    song.webpage_url,
+                    loop=self.bot.loop,
+                    stream=True,
+                    volume=state.volume
+                )
                 
                 # 3. Play
                 if state.voice_client and state.voice_client.is_connected():
@@ -469,12 +453,24 @@ class Music(commands.Cog):
                     )
                     await self._update_now_playing_message(guild_id)
 
-                # 4. Pre-fetch next song
-                await self._prefetch_next(guild_id)
+                # 4. Mood Refresh: Replace 1 hidden song with something similar
+                if state.autoplay_hidden:
+                    similar = await discovery_engine.get_mood_recommendation(guild_id, song.title, song.author)
+                    if similar:
+                        # Replace a random hidden song (index 5-9 in logical session list)
+                        idx = random.randint(0, len(state.autoplay_hidden)-1)
+                        old = state.autoplay_hidden[idx]
+                        state.autoplay_hidden[idx] = Song(
+                            title=similar['song'],
+                            url=similar['url'],
+                            webpage_url=similar['url'],
+                            duration=0,
+                            author=similar['artist']
+                        )
+                        logger.info(f"Mood Refresh: Swapped hidden '{old.title}' for '{state.autoplay_hidden[idx].title}' (Mood relevance).")
                     
             except Exception as e:
-                logger.error(f"Error playing song: {e}")
-                await asyncio.sleep(2)
+                logger.error(f"Error playing song '{song.title}': {e}")
                 self.play_next(guild_id)
         
         asyncio.run_coroutine_threadsafe(play_async(), self.bot.loop)
@@ -533,21 +529,34 @@ class Music(commands.Cog):
             )
             return
         
+        # Record "request" interaction
+        await discovery_engine.record_interaction(
+            interaction.user.id, 
+            song.author, 
+            song.title, 
+            song.webpage_url, 
+            "request"
+        )
+        
         if vc.is_playing() or vc.is_paused():
+            # Add to the bottom of the requested songs (which is just the queue)
+            # This naturally puts it above autoplay songs in the play_next logic
             state.queue.append(song)
             await interaction.followup.send(
                 embed=create_added_to_queue_embed(song, len(state.queue))
             )
+            
+            # Mood refresh: If playing, update hidden autoplay for this request
+            asyncio.create_task(discovery_engine.get_mood_recommendation(interaction.guild.id, song.title, song.author))
         else:
-            # Enable autoplay by default for Vexo "Smart" experience
-            state.is_autoplay = True
-            
-            # Use the standardized play method which handles pre-fetching
             self._play_song(interaction.guild.id, song)
-            
             await interaction.followup.send(
                 embed=create_now_playing_embed(song, state)
             )
+            
+            # Trigger initial discovery refill if empty
+            if not state.total_autoplay:
+                asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
 
     @app_commands.command(name="just_play", description="Start smart autoplay without a specific request")
     async def just_play(self, interaction: discord.Interaction):
@@ -654,8 +663,13 @@ class Music(commands.Cog):
             
             # Record skip interaction
             if state.current:
-                discovery_engine.set_interactor(interaction.guild.id, interaction.user.id)
-                await discovery_engine.record_interaction(interaction.user.id, state.current.webpage_url, "skip")
+                await discovery_engine.record_interaction(
+                    interaction.user.id,
+                    state.current.author,
+                    state.current.title,
+                    state.current.webpage_url,
+                    "skip"
+                )
                 
             vc.stop()
             await interaction.response.send_message(
@@ -684,10 +698,10 @@ class Music(commands.Cog):
             return
         
         state.queue.clear()
-        state.autoplay_buffer.clear()
+        state.autoplay_visible.clear()
+        state.autoplay_hidden.clear()
         state.current = None
         state.loop_mode = "off"
-        state.is_autoplay = False
         
         if vc.is_playing() or vc.is_paused():
             vc.stop()
@@ -710,19 +724,17 @@ class Music(commands.Cog):
             return
         
         state = self.get_state(interaction.guild.id)
-        embed = create_queue_embed(state.queue, state.current, page)
         
-        # Add autoplay info
-        footer_parts = []
-        if state.is_autoplay:
-            footer_parts.append(f"🎲 Autoplay ON ({len(state.autoplay_buffer)} buffered)")
-        if state.favorite_artists:
-            footer_parts.append(f"⭐ {len(state.favorite_artists)} favorites")
+        # Combine Requested + Visible Autoplay for the embed
+        full_queue = state.queue + state.autoplay_visible
+        embed = create_queue_embed(full_queue, state.current, page)
         
-        if footer_parts:
-            existing = embed.footer.text if embed.footer else ""
-            new_footer = f"{existing} • {' • '.join(footer_parts)}".strip(" •")
-            embed.set_footer(text=new_footer)
+        # Footers for transparency
+        footer_parts = [f"🎲 Autoplay ({len(state.autoplay_visible)} visible, {len(state.autoplay_hidden)} hidden)"]
+        
+        existing = embed.footer.text if embed.footer else ""
+        new_footer = f"{existing} • {' • '.join(footer_parts)}".strip(" •")
+        embed.set_footer(text=new_footer)
         
         await interaction.response.send_message(embed=embed)
     
@@ -1143,22 +1155,15 @@ class Music(commands.Cog):
             embed=create_success_embed(f"🗑️ Cleared **{count}** songs from the queue.")
         )
     
-    @app_commands.command(name="upcoming", description="Show next 5 autoplay songs with jump-to buttons")
+    @app_commands.command(name="upcoming", description="Show next 5 autoplay songs")
     async def upcoming(self, interaction: discord.Interaction):
-        """Show upcoming autoplay songs with interactive jump buttons."""
+        """Show upcoming autoplay songs."""
         if not interaction.guild:
             return
         
         state = self.get_state(interaction.guild.id)
         
-        if not state.is_autoplay:
-            await interaction.response.send_message(
-                embed=create_error_embed("Autoplay is not enabled! Use `/autoplay` to enable it."),
-                ephemeral=True
-            )
-            return
-        
-        if not state.autoplay_buffer:
+        if not state.autoplay_visible:
             await interaction.response.send_message(
                 embed=create_info_embed(
                     "Autoplay Buffer Empty",
@@ -1168,10 +1173,8 @@ class Music(commands.Cog):
             )
             return
         
-        embed = create_upcoming_autoplay_embed(state.autoplay_buffer[:5])
-        view = AutoplayPreviewView(self, interaction.guild.id)
-        
-        await interaction.response.send_message(embed=embed, view=view)
+        embed = create_upcoming_autoplay_embed(state.autoplay_visible)
+        await interaction.response.send_message(embed=embed)
     
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -1190,13 +1193,23 @@ class Music(commands.Cog):
         
         state = self.get_state(member.guild.id)
         
-        if vc.channel and len(vc.channel.members) == 1:
-            if not state.is_24_7:
-                state.queue.clear()
-                state.autoplay_buffer.clear()
-                state.current = None
-                state.is_autoplay = False
-                await vc.disconnect()
+        if vc.channel:
+            # Trigger discovery check on joins/leaves
+            logger.info(f"Voice State Update: User {member.name} {'joined' if after.channel else 'left'} {vc.channel.name}")
+            
+            # If someone left, clear any songs that were only in there because of them?
+            # Actually, simpler: just trigger a partial refill/refresh
+            if state.is_autoplay:
+                asyncio.create_task(self._refill_autoplay_buffer(member.guild.id))
+
+            if len(vc.channel.members) == 1:
+                if not state.is_24_7:
+                    state.queue.clear()
+                    state.autoplay_visible.clear()
+                    state.autoplay_hidden.clear()
+                    state.current = None
+                    await vc.disconnect()
+                    logger.info(f"Auto-Disconnect: VC empty in guild {member.guild.id}.")
 
 
 async def setup(bot: commands.Bot):
