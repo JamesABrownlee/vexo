@@ -406,8 +406,8 @@ class Music(commands.Cog):
         embed = create_now_playing_embed(state.current, state)
         
         # Add autoplay buffer info if active
-        if state.is_autoplay and state.autoplay_buffer:
-            next_up = state.autoplay_buffer[0]
+        if state.is_autoplay and state.autoplay_visible:
+            next_up = state.autoplay_visible[0]
             embed.add_field(
                 name="🎲 Autoplay Next",
                 value=f"{next_up.title[:40]}..." if len(next_up.title) > 40 else next_up.title,
@@ -482,8 +482,8 @@ class Music(commands.Cog):
         
         if state.queue:
             next_song = state.queue[0]
-        elif state.is_autoplay and state.autoplay_buffer:
-            next_song = state.autoplay_buffer[0]
+        elif state.is_autoplay and state.autoplay_visible:
+            next_song = state.autoplay_visible[0]
             
         if next_song:
             if not state.prefetched_song or state.prefetched_song.webpage_url != next_song.webpage_url:
@@ -504,7 +504,7 @@ class Music(commands.Cog):
             # Buffer is empty, trigger a refill so we can prefetch something
             await self._refill_autoplay_buffer(guild_id)
             # Re-call self to try and prefetch now that buffer might have items
-            if state.autoplay_buffer:
+            if state.autoplay_visible:
                 await self._prefetch_next(guild_id)
     
     @app_commands.command(name="play", description="Play a song from YouTube")
@@ -581,15 +581,22 @@ class Music(commands.Cog):
         # Trigger immediate refill
         await self._refill_autoplay_buffer(interaction.guild.id)
         
-        if state.autoplay_buffer:
-            next_song = state.autoplay_buffer.pop(0)
+        # Fallback: If still empty, try to get some "trending" songs
+        if not state.autoplay_visible:
+            logger.info("Discovery Pool empty. Attempting trending fallback...")
+            trending_songs = await YTDLSource.search_by_artist("trending music", count=3)
+            if trending_songs:
+                state.autoplay_visible.extend(trending_songs)
+
+        if state.autoplay_visible:
+            next_song = state.autoplay_visible.pop(0)
             self._play_song(interaction.guild.id, next_song)
             await interaction.followup.send(
-                embed=create_success_embed("🎶 **Vexo Discovery Started!**\nPlaying songs based on the current audience.")
+                embed=create_success_embed("🎶 **Vexo Discovery Started!**\nPlaying songs based on your vibe (or trending hits).")
             )
         else:
             await interaction.followup.send(
-                embed=create_error_embed("Couldn't find any songs to play right now. Try adding some `/play` or `/favorites` first!")
+                embed=create_error_embed("Still couldn't find any songs! Try requesting something manually first.")
             )
     
     @app_commands.command(name="pause", description="Pause the current song")
@@ -803,13 +810,12 @@ class Music(commands.Cog):
             # Start buffering immediately
             asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
             
-            desc = "🎲 **Autoplay Enabled**\nI'll play similar songs when the queue is empty."
-            if state.favorite_artists:
-                desc += f"\n⭐ Using {len(state.favorite_artists)} favorite artist(s)"
-            
-            await interaction.response.send_message(embed=create_success_embed(desc))
+            await interaction.response.send_message(
+                embed=create_success_embed("🎲 **Autoplay Enabled**\nI'll play similar songs based on the audience vibe!")
+            )
         else:
-            state.autoplay_buffer.clear()
+            state.autoplay_visible.clear()
+            state.autoplay_hidden.clear()
             await interaction.response.send_message(
                 embed=create_success_embed("🎲 **Autoplay Disabled**")
             )
@@ -836,77 +842,12 @@ class Music(commands.Cog):
         if not interaction.guild:
             return
         
-        state = self.get_state(interaction.guild.id)
-        
-        if action == "add":
-            if not artist:
-                await interaction.response.send_message(
-                    embed=create_error_embed("Please provide an artist name!"),
-                    ephemeral=True
-                )
-                return
-            
-            state.favorite_artists.add(artist)
-            
-            # Persist setting
-            self.settings.set(interaction.guild.id, "favorite_artists", list(state.favorite_artists))
-            
-            await interaction.response.send_message(
-                embed=create_success_embed(f"⭐ Added **{artist}** to favorites!")
-            )
-            
-            # Refresh buffer with new favorite
-            if state.is_autoplay:
-                state.autoplay_buffer.clear()
-                asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
-        
-        elif action == "remove":
-            if not artist:
-                await interaction.response.send_message(
-                    embed=create_error_embed("Please provide an artist name!"),
-                    ephemeral=True
-                )
-                return
-            
-            if artist in state.favorite_artists:
-                state.favorite_artists.remove(artist)
-                
-                # Persist setting
-                self.settings.set(interaction.guild.id, "favorite_artists", list(state.favorite_artists))
-                
-                await interaction.response.send_message(
-                    embed=create_success_embed(f"Removed **{artist}** from favorites.")
-                )
-            else:
-                await interaction.response.send_message(
-                    embed=create_error_embed(f"**{artist}** is not in your favorites."),
-                    ephemeral=True
-                )
-        
-        elif action == "list":
-            if not state.favorite_artists:
-                await interaction.response.send_message(
-                    embed=create_info_embed(
-                        "Favorite Artists",
-                        "No favorites set.\nUse `/favorites add <artist>` to add some!"
-                    )
-                )
-            else:
-                artists_list = "\n".join(f"⭐ {a}" for a in sorted(state.favorite_artists))
-                await interaction.response.send_message(
-                    embed=create_info_embed("Favorite Artists", artists_list)
-                )
-        
-        elif action == "clear":
-            count = len(state.favorite_artists)
-            state.favorite_artists.clear()
-            
-            # Persist setting
-            self.settings.set(interaction.guild.id, "favorite_artists", [])
-            
-            await interaction.response.send_message(
-                embed=create_success_embed(f"Cleared {count} favorite artist(s).")
-            )
+        # LEGACY: Favorite artists are now handled by Discovery Engine interaction & Pool.
+        # This command is deprecated in Vexo Smart.
+        await interaction.response.send_message(
+            embed=create_info_embed("Vexo Recommendations", "Vexo now learns from your likes automatically! Use 👍/👎 or `/play` to teach me your taste."),
+            ephemeral=True
+        )
     
     @app_commands.command(name="nowplaying", description="Show the currently playing song with interactive controls")
     async def nowplaying(self, interaction: discord.Interaction):
@@ -921,8 +862,9 @@ class Music(commands.Cog):
             suggestion = None
             
             # Try to get a suggestion from autoplay buffer
-            if state.autoplay_buffer:
-                suggestion = state.autoplay_buffer[0]
+            # Try to get a suggestion from autoplay buffer
+            if state.autoplay_visible:
+                suggestion = state.autoplay_visible[0]
             # Or from history
             elif state.history:
                 suggestion = list(state.history)[-1]
@@ -1103,9 +1045,10 @@ class Music(commands.Cog):
                 embed=create_success_embed(f"⏱️ **Max Duration Set to {minutes} minutes**\nAutoplay will skip songs longer than this.")
             )
         
-        # Clear and refill autoplay buffer with new filter
+        # Refresh buffer with new filter
         if state.is_autoplay:
-            state.autoplay_buffer.clear()
+            state.autoplay_visible.clear()
+            state.autoplay_hidden.clear()
             asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
     
     @app_commands.command(name="disconnect", description="Disconnect from voice channel")
@@ -1131,7 +1074,8 @@ class Music(commands.Cog):
             state.original_channel_status = None
         
         state.queue.clear()
-        state.autoplay_buffer.clear()
+        state.autoplay_visible.clear()
+        state.autoplay_hidden.clear()
         state.current = None
         state.is_autoplay = False
         state.is_channel_status = False

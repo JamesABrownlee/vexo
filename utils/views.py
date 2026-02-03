@@ -505,8 +505,8 @@ class NowPlayingView(ui.View):
             song_to_play = None
             
             # Check autoplay buffer first
-            if state.autoplay_buffer:
-                song_to_play = state.autoplay_buffer.pop(0)
+            if state.autoplay_visible:
+                song_to_play = state.autoplay_visible.pop(0)
             # Fall back to last played song from history
             elif state.history:
                 song_to_play = list(state.history)[-1]
@@ -558,7 +558,8 @@ class NowPlayingView(ui.View):
         vc = interaction.guild.voice_client
         
         state.queue.clear()
-        state.autoplay_buffer.clear()
+        state.autoplay_visible.clear()
+        state.autoplay_hidden.clear()
         state.current = None
         state.loop_mode = "off"
         

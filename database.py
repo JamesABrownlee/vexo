@@ -32,16 +32,34 @@ class Database:
                 )
             ''')
             
-            # 2. User Preferences
+            # 2. User Preferences (with artist for affinity)
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     user_id INTEGER,
+                    artist TEXT,
                     liked_song TEXT,
                     score INTEGER,
                     url TEXT,
                     PRIMARY KEY (user_id, url)
                 )
             ''')
+            
+            # Migration: Ensure user_id and artist exist in user_preferences
+            try:
+                await db.execute('ALTER TABLE user_preferences ADD COLUMN artist TEXT')
+                logger.info("Migrated user_preferences: Added artist column.")
+            except: pass # Column likely exists
+
+            try:
+                # If old column was discord_id, try to copy it?
+                # Actually, if user_id is missing, the query SELECT * FROM user_preferences WHERE user_id = ? fails.
+                # Let's check if we can rename discord_id to user_id if it exists.
+                async with db.execute("PRAGMA table_info(user_preferences)") as cursor:
+                    cols = [row[1] for row in await cursor.fetchall()]
+                    if 'discord_id' in cols and 'user_id' not in cols:
+                        await db.execute('ALTER TABLE user_preferences RENAME COLUMN discord_id TO user_id')
+                        logger.info("Migrated user_preferences: Renamed discord_id to user_id.")
+            except: pass
             
             # 3. Guild Autoplay Pool
             await db.execute('''
@@ -91,15 +109,15 @@ class Database:
             ''', (guild_id, url, cutoff)) as cursor:
                 return await cursor.fetchone() is not None
 
-    async def update_user_preference(self, user_id: int, song_title: str, url: str, delta: int):
+    async def update_user_preference(self, user_id: int, artist: str, song_title: str, url: str, delta: int):
         """Update a user's preference score."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
-                INSERT INTO user_preferences (user_id, liked_song, score, url)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO user_preferences (user_id, artist, liked_song, score, url)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, url) DO UPDATE SET
                     score = score + excluded.score
-            ''', (user_id, song_title, delta, url))
+            ''', (user_id, artist, song_title, delta, url))
             await db.commit()
 
     async def get_user_preferences(self, user_id: int) -> List[Dict[str, Any]]:

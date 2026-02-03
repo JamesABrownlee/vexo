@@ -129,7 +129,7 @@ class DiscoveryEngine:
         delta = weights.get(interaction_type, 0)
         if delta != 0:
             logger.info(f"Interaction: {interaction_type} by {user_id} for '{song_title}' (Delta: {delta})")
-            await db.update_user_preference(user_id, song_title, url, delta)
+            await db.update_user_preference(user_id, artist, song_title, url, delta)
             # Also ensure it's in the global autoplay pool for future discovery
             await db.add_to_autoplay_pool(0, artist, song_title, url) # 0 for global or specific guild
 
