@@ -196,6 +196,48 @@ class YTDLSource(discord.PCMVolumeTransformer):
         except Exception as e:
             logger.error(f"Error searching by artist '{artist}': {e}")
             return []
+    
+    @classmethod
+    async def from_playlist(cls, playlist_url: str, *, loop=None, shuffle: bool = False, count: int = 10) -> List[Song]:
+        """Extract songs from a YouTube playlist."""
+        loop = loop or asyncio.get_event_loop()
+        
+        # Use extract_flat for faster playlist extraction
+        opts = Config.YTDL_FORMAT_OPTIONS.copy()
+        opts['extract_flat'] = 'in_playlist'
+        opts['playlistend'] = 50  # Limit to first 50 for performance
+        
+        try:
+            ytdl_instance = yt_dlp.YoutubeDL(opts)
+            data = await loop.run_in_executor(
+                None,
+                lambda: ytdl_instance.extract_info(playlist_url, download=False)
+            )
+            
+            if data is None or 'entries' not in data:
+                return []
+            
+            entries = [e for e in data['entries'] if e]
+            
+            if shuffle:
+                random.shuffle(entries)
+            
+            songs = []
+            for entry in entries[:count]:
+                songs.append(Song(
+                    title=entry.get('title', 'Unknown'),
+                    url=entry.get('url', ''),
+                    webpage_url=entry.get('webpage_url') or f"https://youtube.com/watch?v={entry.get('id', '')}",
+                    duration=entry.get('duration', 0) or 0,
+                    thumbnail=entry.get('thumbnail'),
+                    author=entry.get('uploader') or entry.get('channel', 'Unknown')
+                ))
+            
+            logger.info(f"Extracted {len(songs)} songs from playlist (shuffled={shuffle})")
+            return songs
+        except Exception as e:
+            logger.error(f"Error extracting playlist: {e}")
+            return []
 
 
 class Music(commands.Cog):
@@ -627,20 +669,19 @@ class Music(commands.Cog):
         # Trigger immediate refill
         await self._refill_autoplay_buffer(interaction.guild.id)
         
-        # Fallback: If still empty, try to get some "trending" songs or a popular playlist
+        # Fallback: If still empty, get random songs from the fallback playlist
         if not state.autoplay_visible:
-            logger.info("Discovery Pool empty. Attempting robust trending fallback...")
-            # Try a mix of search terms
-            fallbacks = ["trending songs 2026", "top spotify hits", "billboard hot 100"]
-            for term in fallbacks:
-                trending_songs = await YTDLSource.search_by_artist(term, count=5)
-                if trending_songs:
+            logger.info("Discovery Pool empty. Fetching from fallback playlist...")
+            fallback_playlist = "https://youtube.com/playlist?list=PLwVGR49CGF7mI6S-s1bFfNgYGm2S3ev-t"
+            try:
+                playlist_songs = await YTDLSource.from_playlist(fallback_playlist, shuffle=True, count=5)
+                if playlist_songs:
                     # Filter by max_duration if set
                     if state.max_duration > 0:
-                        trending_songs = [s for s in trending_songs if s.duration > 0 and s.duration <= state.max_duration]
-                    state.autoplay_visible.extend(trending_songs[:3])  # Take up to 3
-                    if state.autoplay_visible:
-                        break 
+                        playlist_songs = [s for s in playlist_songs if s.duration == 0 or s.duration <= state.max_duration]
+                    state.autoplay_visible.extend(playlist_songs[:3])  # Take up to 3
+            except Exception as e:
+                logger.error(f"Failed to fetch fallback playlist: {e}")
 
         # Find a song that passes the duration filter
         next_song = None
