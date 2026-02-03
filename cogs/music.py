@@ -485,7 +485,13 @@ class Music(commands.Cog):
                     self.play_next(guild_id)
                     return
                 
-                # 4. Play
+                # 4. Update song with actual metadata from source
+                if actual_duration > 0:
+                    state.current.duration = actual_duration
+                if source.thumbnail:
+                    state.current.thumbnail = source.thumbnail
+                
+                # 5. Play
                 if state.voice_client and state.voice_client.is_connected():
                     state.voice_client.play(
                         source,
