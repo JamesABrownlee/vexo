@@ -1,0 +1,1207 @@
+"""
+Music Cog - All music-related commands using yt-dlp.
+Supports YouTube playback, queue management, smart autoplay, and 24/7 mode.
+"""
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+import asyncio
+import yt_dlp
+from typing import Optional, List, Set
+from dataclasses import dataclass, field
+from collections import deque
+import random
+import logging
+
+from config import Config
+from utils.embeds import (
+    create_now_playing_embed,
+    create_queue_embed,
+    create_added_to_queue_embed,
+    create_error_embed,
+    create_success_embed,
+    create_info_embed,
+    create_upcoming_autoplay_embed,
+    create_idle_embed,
+)
+from utils.views import NowPlayingView, AutoplayPreviewView
+from database import db
+from utils.discovery import discovery_engine
+
+logger = logging.getLogger('Vexo.Music')
+
+
+@dataclass
+class Song:
+    """Represents a song in the queue."""
+    title: str
+    url: str
+    webpage_url: str
+    duration: int  # in seconds
+    thumbnail: Optional[str] = None
+    author: str = "Unknown"
+
+
+@dataclass
+class GuildMusicState:
+    """Music state for a guild."""
+    queue: List[Song] = field(default_factory=list)
+    current: Optional[Song] = None
+    loop_mode: str = "off"  # off, song, queue
+    is_24_7: bool = False
+    is_autoplay: bool = False
+    volume: float = Config.DEFAULT_VOLUME
+    voice_client: Optional[discord.VoiceClient] = None
+    history: deque = field(default_factory=lambda: deque(maxlen=15))  # Increased for better diversity
+    text_channel: Optional[discord.TextChannel] = None
+    
+    # Enhanced autoplay
+    autoplay_buffer: List[Song] = field(default_factory=list)  # Pre-computed upcoming songs
+    favorite_artists: Set[str] = field(default_factory=set)  # User's favorite artists
+    recently_used_artists: deque = field(default_factory=lambda: deque(maxlen=5))  # Track artist usage
+    is_fetching_autoplay: bool = False  # Prevent concurrent fetches
+    
+    # Channel status feature
+    is_channel_status: bool = False  # Toggle for channel status updates
+    original_channel_status: Optional[str] = None  # Store original status to restore later
+    
+    # Now playing message tracking (for auto-update)
+    now_playing_message: Optional[discord.Message] = None  # Current now playing message to delete/update
+    
+    # Max duration filter for autoplay (in seconds, default 5 minutes)
+    max_duration: int = 300  
+    
+    # Pre-fetching
+    prefetched_source: Optional[Any] = None  # Holds the prefetched YTDLSource
+    prefetched_song: Optional[Song] = None  # Which song is currently prefetched
+
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    """Audio source using yt-dlp."""
+    
+    ytdl = None  # Will be initialized on first use or with new options
+    
+    @classmethod
+    def get_ytdl(cls):
+        """Create or return YoutubeDL instance with current config."""
+        if cls.ytdl is None:
+            options = Config.YTDL_FORMAT_OPTIONS.copy()
+            if Config.YTDL_COOKIES_PATH:
+                options['cookiefile'] = Config.YTDL_COOKIES_PATH
+            
+            # Correct way to pass PO Token in modern yt-dlp Python API
+            if Config.YTDL_PO_TOKEN:
+                options['extractor_args'] = {
+                    'youtube': {
+                        'po_token': [Config.YTDL_PO_TOKEN]
+                    }
+                }
+            
+            cls.ytdl = yt_dlp.YoutubeDL(options)
+        return cls.ytdl
+    
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
+        self.webpage_url = data.get('webpage_url')
+        self.duration = data.get('duration', 0)
+        self.thumbnail = data.get('thumbnail')
+        self.author = data.get('uploader', 'Unknown')
+    
+    @classmethod
+    async def from_url(cls, url: str, *, loop=None, stream=True, volume=0.5):
+        """Create audio source from URL."""
+        loop = loop or asyncio.get_event_loop()
+        
+        data = await loop.run_in_executor(
+            None, 
+            lambda: cls.get_ytdl().extract_info(url, download=not stream)
+        )
+        
+        if 'entries' in data:
+            data = data['entries'][0]
+        
+        filename = data['url'] if stream else cls.get_ytdl().prepare_filename(data)
+        
+        return cls(
+            discord.FFmpegPCMAudio(filename, **Config.FFMPEG_OPTIONS),
+            data=data,
+            volume=volume
+        )
+    
+    @classmethod
+    async def search(cls, query: str, *, loop=None) -> Optional[Song]:
+        """Search for a song and return Song object."""
+        loop = loop or asyncio.get_event_loop()
+        
+        if not query.startswith(('http://', 'https://')):
+            query = f"ytsearch:{query}"
+        
+        try:
+            data = await loop.run_in_executor(
+                None,
+                lambda: cls.get_ytdl().extract_info(query, download=False)
+            )
+            
+            if data is None:
+                return None
+            
+            if 'entries' in data:
+                if not data['entries']:
+                    return None
+                data = data['entries'][0]
+            
+            return Song(
+                title=data.get('title', 'Unknown'),
+                url=data.get('url', ''),
+                webpage_url=data.get('webpage_url', ''),
+                duration=data.get('duration', 0) or 0,
+                thumbnail=data.get('thumbnail'),
+                author=data.get('uploader', 'Unknown')
+            )
+        except Exception:
+            return None
+    
+    @classmethod
+    async def search_by_artist(cls, artist: str, count: int = 3, *, loop=None) -> List[Song]:
+        """Search for multiple songs by an artist."""
+        loop = loop or asyncio.get_event_loop()
+        query = f"ytsearch{count}:{artist} official music"
+        
+        try:
+            data = await loop.run_in_executor(
+                None,
+                lambda: cls.get_ytdl().extract_info(query, download=False)
+            )
+            
+            if data is None or 'entries' not in data:
+                return []
+            
+            songs = []
+            for entry in data['entries']:
+                if entry:
+                    songs.append(Song(
+                        title=entry.get('title', 'Unknown'),
+                        url=entry.get('url', ''),
+                        webpage_url=entry.get('webpage_url', ''),
+                        duration=entry.get('duration', 0) or 0,
+                        thumbnail=entry.get('thumbnail'),
+                        author=entry.get('uploader', 'Unknown')
+                    ))
+            return songs
+        except Exception as e:
+            logger.error(f"Error searching by artist '{artist}': {e}")
+            return []
+
+
+class Music(commands.Cog):
+    """Music commands cog."""
+    
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.guild_states: dict[int, GuildMusicState] = {}
+        
+        # Initialize database
+        asyncio.create_task(db.initialize())
+        
+        self.autoplay_refill_task.start()
+        
+        # Import settings manager
+        from utils.settings import settings_manager
+        self.settings = settings_manager
+    
+    def cog_unload(self):
+        self.autoplay_refill_task.cancel()
+    
+    def get_state(self, guild_id: int) -> GuildMusicState:
+        """Get or create music state for guild, loading persistent settings."""
+        if guild_id not in self.guild_states:
+            state = GuildMusicState()
+            
+            # Load persistent settings
+            saved = self.settings.get_guild_settings(guild_id)
+            state.volume = saved["volume"] / 100  # Convert to 0.0-1.0
+            state.max_duration = saved["max_duration"]
+            state.is_24_7 = saved["is_24_7"]
+            state.is_channel_status = saved["is_channel_status"]
+            state.favorite_artists = set(saved["favorite_artists"])
+            state.is_autoplay = saved["is_autoplay"]
+            state.loop_mode = saved["loop_mode"]
+            
+            self.guild_states[guild_id] = state
+        return self.guild_states[guild_id]
+    
+    @tasks.loop(seconds=10)
+    async def autoplay_refill_task(self):
+        """Background task to keep autoplay buffers filled."""
+        for guild_id, state in self.guild_states.items():
+            if state.is_autoplay and not state.is_fetching_autoplay:
+                # Keep buffer at 5 songs
+                if len(state.autoplay_buffer) < 5:
+                    await self._refill_autoplay_buffer(guild_id)
+    
+    @autoplay_refill_task.before_loop
+    async def before_autoplay_refill(self):
+        await self.bot.wait_until_ready()
+    
+    async def _refill_autoplay_buffer(self, guild_id: int):
+        """Refill the autoplay buffer using the Vexo Discovery Engine."""
+        state = self.get_state(guild_id)
+        
+        if state.is_fetching_autoplay or not state.voice_client:
+            return
+        
+        state.is_fetching_autoplay = True
+        
+        try:
+            songs_needed = 5 - len(state.autoplay_buffer)
+            if songs_needed <= 0:
+                return
+            
+            # Get members in the same voice channel
+            vc = state.voice_client.channel
+            if not vc:
+                return
+                
+            member_ids = [m.id for m in vc.members if not m.bot]
+            if not member_ids:
+                return # No human users, don't waste resources refilling
+
+            # Get recommendations from discovery engine
+            recommended_queries = await discovery_engine.get_next_songs(guild_id, member_ids, count=songs_needed)
+            
+            # If discovery engine has no specific recommendations, use favorites as fallback
+            if not recommended_queries and state.favorite_artists:
+                recommended_queries = random.sample(list(state.favorite_artists), min(len(state.favorite_artists), songs_needed))
+
+            for query in recommended_queries:
+                song = await YTDLSource.search(query, loop=self.bot.loop)
+                if song:
+                    # Check if already in buffer or history
+                    if any(s.webpage_url == song.webpage_url for s in state.autoplay_buffer):
+                        continue
+                    
+                    state.autoplay_buffer.append(song)
+                    logger.info(f"Vexo Discovery: Added '{song.title}' to buffer for guild {guild_id}")
+                    
+        except Exception as e:
+            logger.error(f"Error refilling autoplay buffer (Discovery): {e}")
+        finally:
+            state.is_fetching_autoplay = False
+    
+    async def _pick_diverse_song(self, *args, **kwargs):
+        # Legacy method replaced by discovery engine
+        pass
+    
+    async def ensure_voice(self, interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
+        """Ensure the user is in a voice channel and bot can join."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                embed=create_error_embed("This command can only be used in a server!"),
+                ephemeral=True
+            )
+            return None
+        
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            return None
+        
+        if not member.voice or not member.voice.channel:
+            await interaction.response.send_message(
+                embed=create_error_embed("You must be in a voice channel!"),
+                ephemeral=True
+            )
+            return None
+        
+        state = self.get_state(interaction.guild.id)
+        
+        if not interaction.guild.voice_client:
+            try:
+                vc = await member.voice.channel.connect()
+                state.voice_client = vc
+                return vc
+            except Exception as e:
+                await interaction.response.send_message(
+                    embed=create_error_embed(f"Failed to join voice channel: {e}"),
+                    ephemeral=True
+                )
+                return None
+        else:
+            vc = interaction.guild.voice_client
+            if vc.channel != member.voice.channel:
+                await interaction.response.send_message(
+                    embed=create_error_embed("You must be in the same voice channel as the bot!"),
+                    ephemeral=True
+                )
+                return None
+            return vc
+    
+    def play_next(self, guild_id: int, error=None):
+        """Play the next song in queue."""
+        state = self.get_state(guild_id)
+        
+        if error:
+            print(f"Player error: {error}")
+        
+        # Add current song to history in DB
+        if state.current:
+            state.history.append(state.current)
+            asyncio.create_task(db.add_to_history(guild_id, state.current.webpage_url, state.current.title))
+        
+        # Handle loop mode
+        if state.loop_mode == "song" and state.current:
+            self._play_song(guild_id, state.current)
+            return
+        
+        if state.loop_mode == "queue" and state.current:
+            state.queue.append(state.current)
+        
+        if not state.queue:
+            # Queue is empty - use autoplay buffer
+            if state.is_autoplay and state.autoplay_buffer:
+                next_song = state.autoplay_buffer.pop(0)
+                self._play_song(guild_id, next_song)
+                return
+            
+            # Autoplay is on but buffer is empty - try to refill and wait
+            if state.is_autoplay and state.history:
+                # Trigger immediate refill and wait a bit
+                async def wait_for_autoplay():
+                    await self._refill_autoplay_buffer(guild_id)
+                    # Check again after refill
+                    if state.autoplay_buffer:
+                        next_song = state.autoplay_buffer.pop(0)
+                        self._play_song(guild_id, next_song)
+                    elif not state.is_24_7 and state.voice_client:
+                        # Still no songs, disconnect
+                        await state.voice_client.disconnect()
+                
+                asyncio.run_coroutine_threadsafe(wait_for_autoplay(), self.bot.loop)
+                return
+            
+            state.current = None
+            if not state.is_24_7 and state.voice_client:
+                asyncio.run_coroutine_threadsafe(
+                    state.voice_client.disconnect(),
+                    self.bot.loop
+                )
+            return
+        
+        # Get next song from queue
+        next_song = state.queue.pop(0)
+        self._play_song(guild_id, next_song)
+    
+    async def _update_now_playing_message(self, guild_id: int):
+        """Delete old now playing message and post a new one with current song."""
+        state = self.get_state(guild_id)
+        
+        if not state.text_channel or not state.current:
+            return
+        
+        # Delete old now playing message if it exists
+        if state.now_playing_message:
+            try:
+                await state.now_playing_message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass  # Message already deleted or no permission
+            state.now_playing_message = None
+        
+        # Create new now playing embed with buttons
+        embed = create_now_playing_embed(state.current, state)
+        
+        # Add autoplay buffer info if active
+        if state.is_autoplay and state.autoplay_buffer:
+            next_up = state.autoplay_buffer[0]
+            embed.add_field(
+                name="🎲 Autoplay Next",
+                value=f"{next_up.title[:40]}..." if len(next_up.title) > 40 else next_up.title,
+                inline=False
+            )
+        
+        # Create interactive view
+        view = NowPlayingView(self, guild_id)
+        
+        try:
+            state.now_playing_message = await state.text_channel.send(embed=embed, view=view)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.error(f"Failed to send now playing message: {e}")
+    
+    def _play_song(self, guild_id: int, song: Song):
+        """Internal method to play a song."""
+        state = self.get_state(guild_id)
+        state.current = song
+        
+        async def play_async():
+            try:
+                # 1. Update channel status
+                if state.is_channel_status and state.voice_client:
+                    channel = state.voice_client.channel
+                    if channel:
+                        status_text = f"🎶 {song.title[:100]}"
+                        try:
+                            await channel.edit(status=status_text)
+                        except: pass
+
+                # 2. Get the source (use prefetched if it matches)
+                if state.prefetched_source and state.prefetched_song and state.prefetched_song.webpage_url == song.webpage_url:
+                    source = state.prefetched_source
+                    state.prefetched_source = None
+                    state.prefetched_song = None
+                    logger.info(f"Using prefetched source for '{song.title}'")
+                else:
+                    source = await YTDLSource.from_url(
+                        song.webpage_url,
+                        loop=self.bot.loop,
+                        stream=True,
+                        volume=state.volume
+                    )
+                
+                # 3. Play
+                if state.voice_client and state.voice_client.is_connected():
+                    state.voice_client.play(
+                        source,
+                        after=lambda e: self.play_next(guild_id, e)
+                    )
+                    await self._update_now_playing_message(guild_id)
+
+                # 4. Pre-fetch next song
+                await self._prefetch_next(guild_id)
+                    
+            except Exception as e:
+                logger.error(f"Error playing song: {e}")
+                await asyncio.sleep(2)
+                self.play_next(guild_id)
+        
+        asyncio.run_coroutine_threadsafe(play_async(), self.bot.loop)
+
+    async def _prefetch_next(self, guild_id: int):
+        """Pre-fetch the next song in the background."""
+        state = self.get_state(guild_id)
+        next_song = None
+        
+        if state.queue:
+            next_song = state.queue[0]
+        elif state.is_autoplay and state.autoplay_buffer:
+            next_song = state.autoplay_buffer[0]
+            
+        if next_song and (not state.prefetched_song or state.prefetched_song.webpage_url != next_song.webpage_url):
+            try:
+                logger.info(f"Pre-fetching next song: '{next_song.title}'")
+                state.prefetched_song = next_song
+                state.prefetched_source = await YTDLSource.from_url(
+                    next_song.webpage_url,
+                    loop=self.bot.loop,
+                    stream=True,
+                    volume=state.volume
+                )
+            except Exception as e:
+                logger.error(f"Error pre-fetching song: {e}")
+                state.prefetched_source = None
+                state.prefetched_song = None
+    
+    @app_commands.command(name="play", description="Play a song from YouTube")
+    @app_commands.describe(query="Song name or YouTube URL")
+    async def play(self, interaction: discord.Interaction, query: str):
+        """Play a song from YouTube."""
+        vc = await self.ensure_voice(interaction)
+        if not vc:
+            return
+        
+        await interaction.response.defer()
+        
+        state = self.get_state(interaction.guild.id)
+        state.voice_client = vc
+        state.text_channel = interaction.channel
+        
+        song = await YTDLSource.search(query, loop=self.bot.loop)
+        
+        if not song:
+            await interaction.followup.send(
+                embed=create_error_embed(f"No results found for: `{query}`")
+            )
+            return
+        
+        if vc.is_playing() or vc.is_paused():
+            state.queue.append(song)
+            await interaction.followup.send(
+                embed=create_added_to_queue_embed(song, len(state.queue))
+            )
+        else:
+            state.current = song
+            
+            try:
+                source = await YTDLSource.from_url(
+                    song.webpage_url,
+                    loop=self.bot.loop,
+                    stream=True,
+                    volume=state.volume
+                )
+                
+                vc.play(
+                    source,
+                    after=lambda e: self.play_next(interaction.guild.id, e)
+                )
+                
+                await interaction.followup.send(
+                    embed=create_now_playing_embed(song, state)
+                )
+            except Exception as e:
+                await interaction.followup.send(
+                    embed=create_error_embed(f"Error playing: {e}")
+                )
+
+    @app_commands.command(name="just_play", description="Start smart autoplay without a specific request")
+    async def just_play(self, interaction: discord.Interaction):
+        """Start smart autoplay."""
+        vc = await self.ensure_voice(interaction)
+        if not vc:
+            return
+            
+        await interaction.response.defer()
+        
+        state = self.get_state(interaction.guild.id)
+        state.voice_client = vc
+        state.text_channel = interaction.channel
+        state.is_autoplay = True
+        
+        if vc.is_playing() or vc.is_paused():
+            await interaction.followup.send(
+                embed=create_info_embed("Vexo is already playing!", "Autoplay is now enabled.")
+            )
+            return
+
+        # Trigger immediate refill
+        await self._refill_autoplay_buffer(interaction.guild.id)
+        
+        if state.autoplay_buffer:
+            next_song = state.autoplay_buffer.pop(0)
+            self._play_song(interaction.guild.id, next_song)
+            await interaction.followup.send(
+                embed=create_success_embed("🎶 **Vexo Discovery Started!**\nPlaying songs based on the current audience.")
+            )
+        else:
+            await interaction.followup.send(
+                embed=create_error_embed("Couldn't find any songs to play right now. Try adding some `/play` or `/favorites` first!")
+            )
+    
+    @app_commands.command(name="pause", description="Pause the current song")
+    async def pause(self, interaction: discord.Interaction):
+        """Pause playback."""
+        if not interaction.guild or not interaction.guild.voice_client:
+            await interaction.response.send_message(
+                embed=create_error_embed("Not playing anything!"),
+                ephemeral=True
+            )
+            return
+        
+        vc = interaction.guild.voice_client
+        
+        if vc.is_paused():
+            await interaction.response.send_message(
+                embed=create_info_embed("Already Paused", "Use `/resume` to continue."),
+                ephemeral=True
+            )
+            return
+        
+        if vc.is_playing():
+            vc.pause()
+            await interaction.response.send_message(
+                embed=create_success_embed("⏸️ Paused the music.")
+            )
+        else:
+            await interaction.response.send_message(
+                embed=create_error_embed("Nothing is playing!"),
+                ephemeral=True
+            )
+    
+    @app_commands.command(name="resume", description="Resume the paused song")
+    async def resume(self, interaction: discord.Interaction):
+        """Resume playback."""
+        if not interaction.guild or not interaction.guild.voice_client:
+            await interaction.response.send_message(
+                embed=create_error_embed("Not connected!"),
+                ephemeral=True
+            )
+            return
+        
+        vc = interaction.guild.voice_client
+        
+        if vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message(
+                embed=create_success_embed("▶️ Resumed the music.")
+            )
+        else:
+            await interaction.response.send_message(
+                embed=create_info_embed("Not Paused", "The player is not paused."),
+                ephemeral=True
+            )
+    
+    @app_commands.command(name="skip", description="Skip the current song")
+    async def skip(self, interaction: discord.Interaction):
+        """Skip the current track."""
+        if not interaction.guild or not interaction.guild.voice_client:
+            await interaction.response.send_message(
+                embed=create_error_embed("Not playing anything!"),
+                ephemeral=True
+            )
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        vc = interaction.guild.voice_client
+        
+        if vc.is_playing() or vc.is_paused():
+            title = state.current.title if state.current else "Unknown"
+            
+            # Record skip interaction
+            if state.current:
+                discovery_engine.set_interactor(interaction.guild.id, interaction.user.id)
+                await discovery_engine.record_interaction(interaction.user.id, state.current.webpage_url, "skip")
+                
+            vc.stop()
+            await interaction.response.send_message(
+                embed=create_success_embed(f"⏭️ Skipped: **{title}**")
+            )
+        else:
+            await interaction.response.send_message(
+                embed=create_error_embed("Nothing is playing!"),
+                ephemeral=True
+            )
+    
+    @app_commands.command(name="stop", description="Stop playing and clear the queue")
+    async def stop(self, interaction: discord.Interaction):
+        """Stop playback and clear queue."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        vc = interaction.guild.voice_client
+        
+        if not vc:
+            await interaction.response.send_message(
+                embed=create_error_embed("Not connected!"),
+                ephemeral=True
+            )
+            return
+        
+        state.queue.clear()
+        state.autoplay_buffer.clear()
+        state.current = None
+        state.loop_mode = "off"
+        state.is_autoplay = False
+        
+        if vc.is_playing() or vc.is_paused():
+            vc.stop()
+        
+        if not state.is_24_7:
+            await vc.disconnect()
+            await interaction.response.send_message(
+                embed=create_success_embed("⏹️ Stopped and disconnected.")
+            )
+        else:
+            await interaction.response.send_message(
+                embed=create_success_embed("⏹️ Stopped and cleared queue. (24/7 mode active)")
+            )
+    
+    @app_commands.command(name="queue", description="View the music queue")
+    @app_commands.describe(page="Page number to view")
+    async def queue(self, interaction: discord.Interaction, page: int = 1):
+        """View the queue."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        embed = create_queue_embed(state.queue, state.current, page)
+        
+        # Add autoplay info
+        footer_parts = []
+        if state.is_autoplay:
+            footer_parts.append(f"🎲 Autoplay ON ({len(state.autoplay_buffer)} buffered)")
+        if state.favorite_artists:
+            footer_parts.append(f"⭐ {len(state.favorite_artists)} favorites")
+        
+        if footer_parts:
+            existing = embed.footer.text if embed.footer else ""
+            new_footer = f"{existing} • {' • '.join(footer_parts)}".strip(" •")
+            embed.set_footer(text=new_footer)
+        
+        await interaction.response.send_message(embed=embed)
+    
+    @app_commands.command(name="shuffle", description="Shuffle the queue")
+    async def shuffle(self, interaction: discord.Interaction):
+        """Shuffle the queue."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        
+        if not state.queue:
+            await interaction.response.send_message(
+                embed=create_error_embed("The queue is empty!"),
+                ephemeral=True
+            )
+            return
+        
+        random.shuffle(state.queue)
+        await interaction.response.send_message(
+            embed=create_success_embed(f"🔀 Shuffled {len(state.queue)} songs!")
+        )
+    
+    @app_commands.command(name="loop", description="Toggle loop mode")
+    @app_commands.describe(mode="Loop mode: off, song, or queue")
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Off", value="off"),
+        app_commands.Choice(name="Song", value="song"),
+        app_commands.Choice(name="Queue", value="queue"),
+    ])
+    async def loop(self, interaction: discord.Interaction, mode: str):
+        """Set loop mode."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        state.loop_mode = mode
+        
+        # Persist setting
+        self.settings.set(interaction.guild.id, "loop_mode", mode)
+        
+        mode_display = {
+            "off": "🚫 Loop disabled",
+            "song": "🔂 Looping current song",
+            "queue": "🔁 Looping entire queue"
+        }
+        
+        await interaction.response.send_message(
+            embed=create_success_embed(mode_display.get(mode, "Unknown mode"))
+        )
+    
+    @app_commands.command(name="autoplay", description="Toggle autoplay mode")
+    async def autoplay(self, interaction: discord.Interaction):
+        """Toggle autoplay mode."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        state.is_autoplay = not state.is_autoplay
+        state.text_channel = interaction.channel
+        
+        # Persist setting
+        self.settings.set(interaction.guild.id, "is_autoplay", state.is_autoplay)
+        
+        if state.is_autoplay:
+            # Start buffering immediately
+            asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
+            
+            desc = "🎲 **Autoplay Enabled**\nI'll play similar songs when the queue is empty."
+            if state.favorite_artists:
+                desc += f"\n⭐ Using {len(state.favorite_artists)} favorite artist(s)"
+            
+            await interaction.response.send_message(embed=create_success_embed(desc))
+        else:
+            state.autoplay_buffer.clear()
+            await interaction.response.send_message(
+                embed=create_success_embed("🎲 **Autoplay Disabled**")
+            )
+    
+    @app_commands.command(name="favorites", description="Manage favorite artists for autoplay (Admin only)")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        action="What to do",
+        artist="Artist name (for add/remove)"
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Add", value="add"),
+        app_commands.Choice(name="Remove", value="remove"),
+        app_commands.Choice(name="List", value="list"),
+        app_commands.Choice(name="Clear", value="clear"),
+    ])
+    async def favorites(
+        self, 
+        interaction: discord.Interaction, 
+        action: str,
+        artist: Optional[str] = None
+    ):
+        """Manage favorite artists for autoplay."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        
+        if action == "add":
+            if not artist:
+                await interaction.response.send_message(
+                    embed=create_error_embed("Please provide an artist name!"),
+                    ephemeral=True
+                )
+                return
+            
+            state.favorite_artists.add(artist)
+            
+            # Persist setting
+            self.settings.set(interaction.guild.id, "favorite_artists", list(state.favorite_artists))
+            
+            await interaction.response.send_message(
+                embed=create_success_embed(f"⭐ Added **{artist}** to favorites!")
+            )
+            
+            # Refresh buffer with new favorite
+            if state.is_autoplay:
+                state.autoplay_buffer.clear()
+                asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
+        
+        elif action == "remove":
+            if not artist:
+                await interaction.response.send_message(
+                    embed=create_error_embed("Please provide an artist name!"),
+                    ephemeral=True
+                )
+                return
+            
+            if artist in state.favorite_artists:
+                state.favorite_artists.remove(artist)
+                
+                # Persist setting
+                self.settings.set(interaction.guild.id, "favorite_artists", list(state.favorite_artists))
+                
+                await interaction.response.send_message(
+                    embed=create_success_embed(f"Removed **{artist}** from favorites.")
+                )
+            else:
+                await interaction.response.send_message(
+                    embed=create_error_embed(f"**{artist}** is not in your favorites."),
+                    ephemeral=True
+                )
+        
+        elif action == "list":
+            if not state.favorite_artists:
+                await interaction.response.send_message(
+                    embed=create_info_embed(
+                        "Favorite Artists",
+                        "No favorites set.\nUse `/favorites add <artist>` to add some!"
+                    )
+                )
+            else:
+                artists_list = "\n".join(f"⭐ {a}" for a in sorted(state.favorite_artists))
+                await interaction.response.send_message(
+                    embed=create_info_embed("Favorite Artists", artists_list)
+                )
+        
+        elif action == "clear":
+            count = len(state.favorite_artists)
+            state.favorite_artists.clear()
+            
+            # Persist setting
+            self.settings.set(interaction.guild.id, "favorite_artists", [])
+            
+            await interaction.response.send_message(
+                embed=create_success_embed(f"Cleared {count} favorite artist(s).")
+            )
+    
+    @app_commands.command(name="nowplaying", description="Show the currently playing song with interactive controls")
+    async def nowplaying(self, interaction: discord.Interaction):
+        """Show current track info with interactive button controls."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        
+        if not state.current:
+            # Nothing playing - show idle state with suggestion
+            suggestion = None
+            
+            # Try to get a suggestion from autoplay buffer
+            if state.autoplay_buffer:
+                suggestion = state.autoplay_buffer[0]
+            # Or from history
+            elif state.history:
+                suggestion = list(state.history)[-1]
+            
+            embed = create_idle_embed(state, suggestion)
+            view = NowPlayingView(self, interaction.guild.id)
+            
+            await interaction.response.send_message(embed=embed, view=view)
+            return
+        
+        embed = create_now_playing_embed(state.current, state)
+        
+        # Add autoplay buffer info
+        if state.is_autoplay and state.autoplay_buffer:
+            next_up = state.autoplay_buffer[0]
+            embed.add_field(
+                name="🎲 Autoplay Next",
+                value=f"{next_up.title[:40]}..." if len(next_up.title) > 40 else next_up.title,
+                inline=False
+            )
+        
+        # Create interactive view with buttons
+        view = NowPlayingView(self, interaction.guild.id)
+        
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    @app_commands.command(name="volume", description="Set the volume (Admin only)")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(level="Volume level (1-100)")
+    async def volume(self, interaction: discord.Interaction, level: int):
+        """Set volume level."""
+        if not interaction.guild:
+            return
+        
+        if not 0 <= level <= 100:
+            await interaction.response.send_message(
+                embed=create_error_embed("Volume must be between 0 and 100!"),
+                ephemeral=True
+            )
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        state.volume = level / 100
+        
+        # Persist setting
+        self.settings.set(interaction.guild.id, "volume", level)
+        
+        vc = interaction.guild.voice_client
+        if vc and vc.source:
+            vc.source.volume = state.volume
+        
+        if level == 0:
+            emoji = "🔇"
+        elif level < 30:
+            emoji = "🔈"
+        elif level < 70:
+            emoji = "🔉"
+        else:
+            emoji = "🔊"
+        
+        await interaction.response.send_message(
+            embed=create_success_embed(f"{emoji} Volume set to **{level}%**")
+        )
+    
+    @app_commands.command(name="247", description="Toggle 24/7 mode")
+    async def twenty_four_seven(self, interaction: discord.Interaction):
+        """Toggle 24/7 mode."""
+        vc = await self.ensure_voice(interaction)
+        if not vc:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        state.is_24_7 = not state.is_24_7
+        
+        # Persist setting
+        self.settings.set(interaction.guild.id, "is_24_7", state.is_24_7)
+        
+        if state.is_24_7:
+            await interaction.response.send_message(
+                embed=create_success_embed("📻 **24/7 Mode Enabled**\nI'll stay in the voice channel even when not playing.")
+            )
+        else:
+            await interaction.response.send_message(
+                embed=create_success_embed("📻 **24/7 Mode Disabled**\nI'll disconnect when the queue is empty.")
+            )
+    
+    @app_commands.command(name="channel_status", description="Toggle voice channel status to show current song (Admin only)")
+    @app_commands.default_permissions(administrator=True)
+    async def channel_status(self, interaction: discord.Interaction):
+        """Toggle voice channel status to show current song."""
+        if not interaction.guild:
+            return
+        
+        vc = await self.ensure_voice(interaction)
+        if not vc:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        
+        if not state.is_channel_status:
+            # Enable - store original status
+            state.is_channel_status = True
+            state.original_channel_status = getattr(vc.channel, 'status', None)
+            
+            # Persist setting
+            self.settings.set(interaction.guild.id, "is_channel_status", True)
+            
+            # Immediately set status if something is playing
+            if state.current:
+                artist = state.current.author if state.current.author else "Unknown"
+                title = state.current.title if state.current.title else "Unknown"
+                if artist.lower() in title.lower():
+                    status_text = f"🎶 {title[:80]}"
+                else:
+                    status_text = f"🎶 {artist[:30]} - {title[:50]}"
+                try:
+                    await vc.channel.edit(status=status_text[:500])
+                except discord.Forbidden:
+                    await interaction.response.send_message(
+                        embed=create_error_embed("I don't have permission to edit the channel status!"),
+                        ephemeral=True
+                    )
+                    state.is_channel_status = False
+                    state.original_channel_status = None
+                    return
+            
+            await interaction.response.send_message(
+                embed=create_success_embed(
+                    "🎶 **Channel Status Enabled**\n"
+                    "Voice channel status will show: `🎶 Artist - Song`\n"
+                    "Status will be cleared on disconnect."
+                )
+            )
+        else:
+            # Disable - clear status
+            try:
+                await vc.channel.edit(status=None)
+            except:
+                pass
+            
+            state.is_channel_status = False
+            state.original_channel_status = None
+            
+            # Persist setting
+            self.settings.set(interaction.guild.id, "is_channel_status", False)
+            
+            await interaction.response.send_message(
+                embed=create_success_embed("🎶 **Channel Status Disabled**\nStatus cleared.")
+            )
+    
+    @app_commands.command(name="maxduration", description="Set max track duration for autoplay (Admin only)")
+    @app_commands.describe(minutes="Max duration in minutes (0 = no limit)")
+    @app_commands.default_permissions(administrator=True)
+    async def maxduration(self, interaction: discord.Interaction, minutes: int):
+        """Set maximum track duration for autoplay."""
+        if not interaction.guild:
+            return
+        
+        if minutes < 0:
+            await interaction.response.send_message(
+                embed=create_error_embed("Duration must be 0 or positive!"),
+                ephemeral=True
+            )
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        state.max_duration = minutes * 60  # Convert to seconds
+        
+        # Persist setting
+        self.settings.set(interaction.guild.id, "max_duration", state.max_duration)
+        
+        if minutes == 0:
+            await interaction.response.send_message(
+                embed=create_success_embed("⏱️ **Max Duration Filter Disabled**\nAutoplay will pick songs of any length.")
+            )
+        else:
+            await interaction.response.send_message(
+                embed=create_success_embed(f"⏱️ **Max Duration Set to {minutes} minutes**\nAutoplay will skip songs longer than this.")
+            )
+        
+        # Clear and refill autoplay buffer with new filter
+        if state.is_autoplay:
+            state.autoplay_buffer.clear()
+            asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
+    
+    @app_commands.command(name="disconnect", description="Disconnect from voice channel")
+    async def disconnect(self, interaction: discord.Interaction):
+        """Disconnect from voice channel."""
+        if not interaction.guild or not interaction.guild.voice_client:
+            await interaction.response.send_message(
+                embed=create_error_embed("Not connected!"),
+                ephemeral=True
+            )
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        
+        # Clear channel status if enabled
+        if state.is_channel_status:
+            channel = interaction.guild.voice_client.channel
+            if channel:
+                try:
+                    await channel.edit(status=None)
+                except:
+                    pass
+            state.original_channel_status = None
+        
+        state.queue.clear()
+        state.autoplay_buffer.clear()
+        state.current = None
+        state.is_autoplay = False
+        state.is_channel_status = False
+        
+        await interaction.guild.voice_client.disconnect()
+        await interaction.response.send_message(
+            embed=create_success_embed("👋 Disconnected from voice channel.")
+        )
+    
+    @app_commands.command(name="clear", description="Clear the queue")
+    async def clear(self, interaction: discord.Interaction):
+        """Clear the queue."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        count = len(state.queue)
+        state.queue.clear()
+        
+        await interaction.response.send_message(
+            embed=create_success_embed(f"🗑️ Cleared **{count}** songs from the queue.")
+        )
+    
+    @app_commands.command(name="upcoming", description="Show next 5 autoplay songs with jump-to buttons")
+    async def upcoming(self, interaction: discord.Interaction):
+        """Show upcoming autoplay songs with interactive jump buttons."""
+        if not interaction.guild:
+            return
+        
+        state = self.get_state(interaction.guild.id)
+        
+        if not state.is_autoplay:
+            await interaction.response.send_message(
+                embed=create_error_embed("Autoplay is not enabled! Use `/autoplay` to enable it."),
+                ephemeral=True
+            )
+            return
+        
+        if not state.autoplay_buffer:
+            await interaction.response.send_message(
+                embed=create_info_embed(
+                    "Autoplay Buffer Empty",
+                    "No songs in buffer yet. Play some songs to build listening history!"
+                ),
+                ephemeral=True
+            )
+            return
+        
+        embed = create_upcoming_autoplay_embed(state.autoplay_buffer[:5])
+        view = AutoplayPreviewView(self, interaction.guild.id)
+        
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState
+    ):
+        """Handle voice state changes."""
+        if member.bot:
+            return
+        
+        vc = member.guild.voice_client
+        if not vc:
+            return
+        
+        state = self.get_state(member.guild.id)
+        
+        if vc.channel and len(vc.channel.members) == 1:
+            if not state.is_24_7:
+                state.queue.clear()
+                state.autoplay_buffer.clear()
+                state.current = None
+                state.is_autoplay = False
+                await vc.disconnect()
+
+
+async def setup(bot: commands.Bot):
+    """Setup function for loading the cog."""
+    await bot.add_cog(Music(bot))

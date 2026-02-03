@@ -1,0 +1,14 @@
+services:
+  # Vexo Smart Discord Music Bot
+  vexo:
+    build: .
+    container_name: vexo
+    restart: unless-stopped
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - DEFAULT_VOLUME=50
+      - YTDL_COOKIES_PATH=/app/data/cookies.txt
+      - YTDL_PO_TOKEN=${YTDL_PO_TOKEN}
+      - DATABASE_PATH=/app/data/vexo.db
+    volumes:
+      - ./data:/app/data

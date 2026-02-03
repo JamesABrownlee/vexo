@@ -1,0 +1,5 @@
+aiosqlite>=0.19.0
+discord.py[voice]>=2.3.0
+yt-dlp>=2026.01.31
+python-dotenv>=1.0.0
+PyNaCl>=1.5.0
