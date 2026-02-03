@@ -26,6 +26,8 @@ services:
       - DATABASE_PATH=/app/data/vexo.db
       # Optional: Custom fallback playlist for when discovery is empty
       - FALLBACK_PLAYLIST=https://youtube.com/playlist?list=PLwVGR49CGF7mI6S-s1bFfNgYGm2S3ev-t
+      # Optional: FFmpeg buffer size for smoother playback (default: 512k)
+      - FFMPEG_BUFFER_SIZE=1M
       # Optional: if you upload cookies.txt to your appdata folder
       - YTDL_COOKIES_PATH=/app/data/cookies.txt
     volumes:

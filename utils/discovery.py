@@ -58,9 +58,9 @@ class DiscoveryEngine:
             
             artist = track.get('artist', '').lower()
             
-            # Enforce 120-minute lockout
-            if await db.is_recently_played(guild_id, url, minutes=120):
-                logger.debug(f"Skipping '{track['song']}' - Played within last 120m.")
+            # Enforce 30-minute lockout (reduced from 120 for smaller pools)
+            if await db.is_recently_played(guild_id, url, minutes=30):
+                logger.debug(f"Skipping '{track['song']}' - Played within last 30m.")
                 continue
 
             score = 0

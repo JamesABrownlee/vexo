@@ -335,6 +335,26 @@ class Music(commands.Cog):
                 else:
                     state.autoplay_hidden.append(song)
             
+            # 3. Fallback to playlist if discovery didn't fill the buffer
+            still_needed = (5 - len(state.autoplay_visible)) + (5 - len(state.autoplay_hidden))
+            if still_needed > 0 and Config.FALLBACK_PLAYLIST:
+                logger.info(f"Discovery insufficient, fetching {still_needed} from fallback playlist...")
+                try:
+                    playlist_songs = await YTDLSource.from_playlist(Config.FALLBACK_PLAYLIST, shuffle=True, count=still_needed + 5)
+                    for ps in playlist_songs:
+                        # Skip duplicates
+                        if any(s.url == ps.url or s.webpage_url == ps.webpage_url for s in state.queue + state.total_autoplay):
+                            continue
+                        # Fill balance
+                        if len(state.autoplay_visible) < 5:
+                            state.autoplay_visible.append(ps)
+                        elif len(state.autoplay_hidden) < 5:
+                            state.autoplay_hidden.append(ps)
+                        else:
+                            break
+                except Exception as e:
+                    logger.error(f"Failed to fetch fallback playlist: {e}")
+            
             logger.info(f"Refill Complete: Visible={len(state.autoplay_visible)}, Hidden={len(state.autoplay_hidden)}")
 
         except Exception as e:
