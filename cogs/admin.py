@@ -12,23 +12,23 @@ class Admin(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="restart", description="Restarts the bot (container).")
+    @app_commands.command(name="restart_vexo", description="Restarts the Vexo bot (container).")
     @app_commands.checks.has_permissions(administrator=True)
-    async def restart(self, interaction: discord.Interaction):
+    async def restart_vexo(self, interaction: discord.Interaction):
         """Restarts the bot by exiting the process."""
-        await interaction.response.send_message("🔄 Restarting the container... Please wait.", ephemeral=True)
+        await interaction.response.send_message("🔄 Restarting Vexo... Please wait.", ephemeral=True)
         logger.info(f"Restart initiated by {interaction.user} (ID: {interaction.user.id})")
         
         # Give some time for the message to be sent
         await self.bot.close()
         sys.exit(0)
 
-    @restart.error
-    async def restart_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+    @restart_vexo.error
+    async def restart_vexo_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.MissingPermissions):
             await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
         else:
-            logger.error(f"Error in /restart: {error}")
+            logger.error(f"Error in /restart_vexo: {error}")
             await interaction.response.send_message(f"❌ An error occurred: {error}", ephemeral=True)
 
 async def setup(bot: commands.Bot):

@@ -1110,6 +1110,60 @@ class Music(commands.Cog):
             state.autoplay_hidden.clear()
             asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
     
+    @app_commands.command(name="pool", description="View the song pool for discovery/autoplay")
+    @app_commands.describe(page="Page number (default: 1)")
+    async def pool(self, interaction: discord.Interaction, page: int = 1):
+        """Show the global song pool with scores."""
+        await interaction.response.defer()
+        
+        # Get the global pool
+        pool_data = await db.get_autoplay_pool(0)
+        
+        if not pool_data:
+            await interaction.followup.send(
+                embed=create_info_embed("🎵 Song Pool", "The pool is empty! Play some songs to populate it.")
+            )
+            return
+        
+        # Get user preferences for scoring
+        user_prefs = await db.get_user_preferences(interaction.user.id)
+        pref_scores = {p['url']: p['score'] for p in user_prefs}
+        
+        # Sort pool by preference score (highest first)
+        sorted_pool = sorted(pool_data, key=lambda x: pref_scores.get(x['url'], 0), reverse=True)
+        
+        # Pagination
+        per_page = 10
+        total_pages = max(1, (len(sorted_pool) + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * per_page
+        end = start + per_page
+        page_items = sorted_pool[start:end]
+        
+        # Build embed
+        embed = discord.Embed(
+            title="🎵 Song Pool",
+            description=f"**{len(pool_data)} songs** available for discovery\nPage {page}/{total_pages}",
+            color=Config.COLOR_PRIMARY
+        )
+        
+        lines = []
+        for i, track in enumerate(page_items, start=start+1):
+            score = pref_scores.get(track['url'], 0)
+            score_display = f"+{score}" if score > 0 else str(score) if score < 0 else "0"
+            title = track['song'][:35] + "..." if len(track['song']) > 35 else track['song']
+            lines.append(f"`{i}.` **{title}** — {track['artist']} `[{score_display}]`")
+        
+        embed.add_field(
+            name="Tracks",
+            value="\n".join(lines) if lines else "No tracks on this page.",
+            inline=False
+        )
+        
+        embed.set_footer(text=f"Use /pool {page+1} for next page • Scores are your personal preferences")
+        
+        await interaction.followup.send(embed=embed)
+    
     @app_commands.command(name="disconnect", description="Disconnect from voice channel")
     async def disconnect(self, interaction: discord.Interaction):
         """Disconnect from voice channel."""
