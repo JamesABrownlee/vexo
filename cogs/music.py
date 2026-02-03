@@ -469,7 +469,7 @@ class Music(commands.Cog):
                         try: await channel.edit(status=status_text)
                         except: pass
 
-                # 2. Get Source
+                # 2. Get Source (this fetches actual stream info including duration)
                 source = await YTDLSource.from_url(
                     song.webpage_url,
                     loop=self.bot.loop,
@@ -477,7 +477,15 @@ class Music(commands.Cog):
                     volume=state.volume
                 )
                 
-                # 3. Play
+                # 3. Check duration filter AFTER fetching real duration
+                actual_duration = source.duration or 0
+                if state.max_duration > 0 and actual_duration > 0 and actual_duration > state.max_duration:
+                    logger.info(f"Duration Filter: Skipping '{song.title}' - actual duration {actual_duration}s exceeds limit {state.max_duration}s")
+                    # Skip to next song
+                    self.play_next(guild_id)
+                    return
+                
+                # 4. Play
                 if state.voice_client and state.voice_client.is_connected():
                     state.voice_client.play(
                         source,
@@ -485,7 +493,7 @@ class Music(commands.Cog):
                     )
                     await self._update_now_playing_message(guild_id)
 
-                # 4. Mood Refresh: Replace 1 hidden song with something similar
+                # 5. Mood Refresh: Replace 1 hidden song with something similar
                 if state.autoplay_hidden:
                     similar = await discovery_engine.get_mood_recommendation(guild_id, song.title, song.author)
                     if similar:
