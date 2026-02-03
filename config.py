@@ -24,6 +24,9 @@ class Config:
     YTDL_COOKIES_PATH: Optional[str] = os.getenv("YTDL_COOKIES_PATH")
     YTDL_PO_TOKEN: Optional[str] = os.getenv("YTDL_PO_TOKEN")
     
+    # Fallback playlist for when discovery pool is empty
+    FALLBACK_PLAYLIST: Optional[str] = os.getenv("FALLBACK_PLAYLIST", "https://youtube.com/playlist?list=PLwVGR49CGF7mI6S-s1bFfNgYGm2S3ev-t")
+    
     # Vexo Discovery Settings
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "data/vexo.db")
     DISCOVERY_WEIGHT_UPVOTE: int = 5

@@ -670,11 +670,10 @@ class Music(commands.Cog):
         await self._refill_autoplay_buffer(interaction.guild.id)
         
         # Fallback: If still empty, get random songs from the fallback playlist
-        if not state.autoplay_visible:
+        if not state.autoplay_visible and Config.FALLBACK_PLAYLIST:
             logger.info("Discovery Pool empty. Fetching from fallback playlist...")
-            fallback_playlist = "https://youtube.com/playlist?list=PLwVGR49CGF7mI6S-s1bFfNgYGm2S3ev-t"
             try:
-                playlist_songs = await YTDLSource.from_playlist(fallback_playlist, shuffle=True, count=5)
+                playlist_songs = await YTDLSource.from_playlist(Config.FALLBACK_PLAYLIST, shuffle=True, count=5)
                 if playlist_songs:
                     # Filter by max_duration if set
                     if state.max_duration > 0:
