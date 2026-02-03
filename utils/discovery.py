@@ -42,16 +42,20 @@ class DiscoveryEngine:
         liked_artists = {}
         liked_urls = {}
         for pref in all_user_prefs:
-            url = pref['url']
+            url = pref.get('url')
+            if not url: continue
+            
             artist = pref.get('artist', '').lower()
-            score = pref['score']
+            score = pref.get('score', 0)
             
             liked_urls[url] = max(liked_urls.get(url, 0), score)
             if artist:
                 liked_artists[artist] = max(liked_artists.get(artist, 0), score)
 
         for track in pool:
-            url = track['url']
+            url = track.get('url')
+            if not url: continue
+            
             artist = track.get('artist', '').lower()
             
             # Enforce 120-minute lockout

@@ -14,8 +14,7 @@ class Database:
         self.db_path = db_path
         
     async def initialize(self):
-        """Initialize the database schema."""
-        # Ensure data directory exists
+        """Initialize the database schema with robust migrations."""
         Path("data").mkdir(exist_ok=True)
         
         async with aiosqlite.connect(self.db_path) as db:
@@ -32,7 +31,7 @@ class Database:
                 )
             ''')
             
-            # 2. User Preferences (with artist for affinity)
+            # 2. User Preferences
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     user_id INTEGER,
@@ -43,23 +42,6 @@ class Database:
                     PRIMARY KEY (user_id, url)
                 )
             ''')
-            
-            # Migration: Ensure user_id and artist exist in user_preferences
-            try:
-                await db.execute('ALTER TABLE user_preferences ADD COLUMN artist TEXT')
-                logger.info("Migrated user_preferences: Added artist column.")
-            except: pass # Column likely exists
-
-            try:
-                # If old column was discord_id, try to copy it?
-                # Actually, if user_id is missing, the query SELECT * FROM user_preferences WHERE user_id = ? fails.
-                # Let's check if we can rename discord_id to user_id if it exists.
-                async with db.execute("PRAGMA table_info(user_preferences)") as cursor:
-                    cols = [row[1] for row in await cursor.fetchall()]
-                    if 'discord_id' in cols and 'user_id' not in cols:
-                        await db.execute('ALTER TABLE user_preferences RENAME COLUMN discord_id TO user_id')
-                        logger.info("Migrated user_preferences: Renamed discord_id to user_id.")
-            except: pass
             
             # 3. Guild Autoplay Pool
             await db.execute('''
@@ -76,7 +58,7 @@ class Database:
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS current_session_plist (
                     guild_id INTEGER,
-                    type TEXT, -- 'requested', 'autoplay_visible', 'autoplay_hidden'
+                    type TEXT,
                     position INTEGER,
                     artist TEXT,
                     song TEXT,
@@ -85,9 +67,32 @@ class Database:
                     PRIMARY KEY (guild_id, type, position)
                 )
             ''')
+
+            # --- Robust Migration Logic ---
+            tables = {
+                "playback_history": ["guild_id", "artist", "song", "url", "user_requesting"],
+                "user_preferences": ["user_id", "artist", "liked_song", "score", "url"],
+                "guild_autoplay_plist": ["guild_id", "artist", "song", "url"],
+                "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"]
+            }
+
+            for table, expected_cols in tables.items():
+                async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                    existing_cols = {row[1]: row[2] for row in await cursor.fetchall()}
+                    
+                    # Special Case: Rename discord_id to user_id in user_preferences
+                    if table == "user_preferences" and "discord_id" in existing_cols and "user_id" not in existing_cols:
+                        await db.execute('ALTER TABLE user_preferences RENAME COLUMN discord_id TO user_id')
+                        logger.info("Migrated user_preferences: Renamed discord_id to user_id.")
+                        existing_cols["user_id"] = existing_cols.pop("discord_id")
+
+                    for col in expected_cols:
+                        if col not in existing_cols:
+                            await db.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+                            logger.info(f"Migration: Added missing column '{col}' to table '{table}'.")
             
             await db.commit()
-            logger.info("Database initialized with new schema.")
+            logger.info("Database initialized and migrated to latest schema.")
 
     async def add_to_history(self, guild_id: int, artist: str, song: str, url: str, user_id: Optional[int] = None):
         """Record a played track in history."""

@@ -200,12 +200,15 @@ class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.guild_states: dict[int, GuildMusicState] = {}
-        
-        # Initialize database
-        asyncio.create_task(db.initialize())
+        logger.info("Vexo Music Cog Initialized (Sync).")
+
+    async def cog_load(self):
+        """Called when the cog is loaded."""
+        # Initialize database and wait for it
+        await db.initialize()
         
         self.autoplay_refill_task.start()
-        logger.info("Vexo Music Cog Initialized.")
+        logger.info("Vexo Music Cog Ready (Async).")
     
     def cog_unload(self):
         self.autoplay_refill_task.cancel()
@@ -581,12 +584,16 @@ class Music(commands.Cog):
         # Trigger immediate refill
         await self._refill_autoplay_buffer(interaction.guild.id)
         
-        # Fallback: If still empty, try to get some "trending" songs
+        # Fallback: If still empty, try to get some "trending" songs or a popular playlist
         if not state.autoplay_visible:
-            logger.info("Discovery Pool empty. Attempting trending fallback...")
-            trending_songs = await YTDLSource.search_by_artist("trending music", count=3)
-            if trending_songs:
-                state.autoplay_visible.extend(trending_songs)
+            logger.info("Discovery Pool empty. Attempting robust trending fallback...")
+            # Try a mix of search terms
+            fallbacks = ["trending songs 2026", "top spotify hits", "billboard hot 100"]
+            for term in fallbacks:
+                trending_songs = await YTDLSource.search_by_artist(term, count=3)
+                if trending_songs:
+                    state.autoplay_visible.extend(trending_songs)
+                    break 
 
         if state.autoplay_visible:
             next_song = state.autoplay_visible.pop(0)
