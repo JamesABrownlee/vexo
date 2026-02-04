@@ -32,6 +32,24 @@ from utils.spotify import fetch_playlist_tracks, SpotifyError
 
 logger = set_logger(logging.getLogger('Vexo.Music'))
 
+async def genre_autocomplete(
+    interaction: discord.Interaction,
+    current: str
+) -> List[app_commands.Choice[str]]:
+    """Autocomplete helper for playlist genres (DB-backed)."""
+    if not interaction.guild:
+        return []
+    genres = await db.get_genre_suggestions(interaction.user.id, interaction.guild.id, limit=50)
+    results: List[app_commands.Choice[str]] = []
+    current_lower = current.lower()
+    for genre in genres:
+        if current_lower and current_lower not in genre.lower():
+            continue
+        results.append(app_commands.Choice(name=genre[:100], value=genre))
+        if len(results) >= 25:
+            break
+    return results
+
 
 @dataclass
 class Song:
@@ -676,7 +694,7 @@ class Music(commands.Cog):
         genre="Optional genre for grouping"
     )
     @app_commands.choices(scope=PLAYLIST_SCOPE_CHOICES)
-    @app_commands.autocomplete(genre=_genre_autocomplete)
+    @app_commands.autocomplete(genre=genre_autocomplete)
     async def playlist_add(
         self,
         interaction: discord.Interaction,
@@ -824,30 +842,12 @@ class Music(commands.Cog):
                 break
         return results
 
-    async def _genre_autocomplete(
-        self,
-        interaction: discord.Interaction,
-        current: str
-    ) -> List[app_commands.Choice[str]]:
-        if not interaction.guild:
-            return []
-        genres = await db.get_genre_suggestions(interaction.user.id, interaction.guild.id, limit=50)
-        results: List[app_commands.Choice[str]] = []
-        current_lower = current.lower()
-        for genre in genres:
-            if current_lower and current_lower not in genre.lower():
-                continue
-            results.append(app_commands.Choice(name=genre[:100], value=genre))
-            if len(results) >= 25:
-                break
-        return results
-
     @playlist_group.command(name="play", description="Play a saved playlist")
     @app_commands.describe(
         playlist="Select a playlist to play",
         genre="Optional genre filter"
     )
-    @app_commands.autocomplete(playlist=_playlist_autocomplete, genre=_genre_autocomplete)
+    @app_commands.autocomplete(playlist=_playlist_autocomplete, genre=genre_autocomplete)
     async def playlist_play(self, interaction: discord.Interaction, playlist: str, genre: Optional[str] = None):
         """Play a previously saved playlist."""
         vc = await self.ensure_voice(interaction)
