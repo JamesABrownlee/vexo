@@ -46,16 +46,16 @@ class MusicControlView(ui.View):
             self.play_pause_button.emoji = "▶️"
             self.play_pause_button.style = discord.ButtonStyle.success
         else:
-            self.play_pause_button.emoji = "⏸️"
+            self.play_pause_button.emoji = "<:pa:1468742763129344184>"
             self.play_pause_button.style = discord.ButtonStyle.secondary
         
         # Update loop button based on mode
         loop_styles = {
-            "off": (discord.ButtonStyle.secondary, "🔁"),
-            "song": (discord.ButtonStyle.primary, "🔂"),
-            "queue": (discord.ButtonStyle.success, "🔁"),
+            "off": (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>"),
+            "song": (discord.ButtonStyle.primary, "<:ra:1468742761548349753>"),
+            "queue": (discord.ButtonStyle.success, "<:ra:1468742761548349753>"),
         }
-        style, emoji = loop_styles.get(state.loop_mode, (discord.ButtonStyle.secondary, "🔁"))
+        style, emoji = loop_styles.get(state.loop_mode, (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>"))
         self.loop_button.style = style
         self.loop_button.emoji = emoji
     
@@ -80,7 +80,7 @@ class MusicControlView(ui.View):
         
         return True
     
-    @ui.button(emoji="⏸️", style=discord.ButtonStyle.secondary, row=0)
+    @ui.button(emoji="<:pa:1468742763129344184>", style=discord.ButtonStyle.secondary, row=0)
     async def play_pause_button(self, interaction: discord.Interaction, button: ui.Button):
         """Toggle play/pause."""
         if not await self._check_voice(interaction):
@@ -90,7 +90,7 @@ class MusicControlView(ui.View):
         
         if vc.is_paused():
             vc.resume()
-            button.emoji = "⏸️"
+            button.emoji = "<:pa:1468742763129344184>"
             button.style = discord.ButtonStyle.secondary
             await interaction.response.edit_message(view=self)
         elif vc.is_playing():
@@ -101,7 +101,7 @@ class MusicControlView(ui.View):
         else:
             await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
     
-    @ui.button(emoji="⏭️", style=discord.ButtonStyle.primary, row=0)
+    @ui.button(emoji="<:sk:1468742764165337280>", style=discord.ButtonStyle.primary, row=0)
     async def skip_button(self, interaction: discord.Interaction, button: ui.Button):
         """Skip to next song."""
         if not await self._check_voice(interaction):
@@ -113,11 +113,11 @@ class MusicControlView(ui.View):
         if vc.is_playing() or vc.is_paused():
             title = state.current.title if state.current else "Unknown"
             vc.stop()  # This triggers play_next
-            await interaction.response.send_message(f"⏭️ Skipped: **{title}**", ephemeral=True)
+            await interaction.response.send_message(f"<:sk:1468742764165337280> Skipped: **{title}**", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
     
-    @ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
+    @ui.button(emoji="<:st:1468742765327286426>", style=discord.ButtonStyle.danger, row=0)
     async def stop_button(self, interaction: discord.Interaction, button: ui.Button):
         """Stop playback and clear session queues."""
         if not await self._check_voice(interaction):
@@ -135,9 +135,9 @@ class MusicControlView(ui.View):
         if vc.is_playing() or vc.is_paused():
             vc.stop()
         
-        await interaction.response.send_message("⏹️ Stopped playback and cleared session queues.", ephemeral=True)
+        await interaction.response.send_message("<:st:1468742765327286426> Stopped playback and cleared session queues.", ephemeral=True)
     
-    @ui.button(emoji="🔀", style=discord.ButtonStyle.secondary, row=0)
+    @ui.button(emoji="<:sh:1468742768540127302>", style=discord.ButtonStyle.secondary, row=0)
     async def shuffle_button(self, interaction: discord.Interaction, button: ui.Button):
         """Shuffle the queue."""
         if not await self._check_voice(interaction):
@@ -151,9 +151,9 @@ class MusicControlView(ui.View):
             return
         
         random.shuffle(state.queue)
-        await interaction.response.send_message(f"🔀 Shuffled {len(state.queue)} songs!", ephemeral=True)
+        await interaction.response.send_message(f"<:sh:1468742768540127302> Shuffled {len(state.queue)} songs!", ephemeral=True)
     
-    @ui.button(emoji="🔁", style=discord.ButtonStyle.secondary, row=0)
+    @ui.button(emoji="<:ra:1468742761548349753>", style=discord.ButtonStyle.secondary, row=0)
     async def loop_button(self, interaction: discord.Interaction, button: ui.Button):
         """Cycle through loop modes: off -> song -> queue -> off."""
         if not await self._check_voice(interaction):
@@ -168,9 +168,9 @@ class MusicControlView(ui.View):
         
         # Update button appearance
         loop_info = {
-            "off": (discord.ButtonStyle.secondary, "🔁", "🚫 Loop disabled"),
-            "song": (discord.ButtonStyle.primary, "🔂", "🔂 Looping current song"),
-            "queue": (discord.ButtonStyle.success, "🔁", "🔁 Looping entire queue"),
+            "off": (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>", "🚫 Loop disabled"),
+            "song": (discord.ButtonStyle.primary, "<:ra:1468742761548349753>", "<:ra:1468742761548349753> Looping current song"),
+            "queue": (discord.ButtonStyle.success, "<:ra:1468742761548349753>", "<:ra:1468742761548349753> Looping entire queue"),
         }
         style, emoji, message = loop_info[state.loop_mode]
         button.style = style
@@ -179,7 +179,7 @@ class MusicControlView(ui.View):
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(message, ephemeral=True)
     
-    @ui.button(emoji="🔉", style=discord.ButtonStyle.secondary, row=1)
+    @ui.button(emoji="<:vd:1468742767206203534>", style=discord.ButtonStyle.secondary, row=1)
     async def volume_down_button(self, interaction: discord.Interaction, button: ui.Button):
         """Decrease volume."""
         if not await self._check_voice(interaction):
@@ -195,11 +195,11 @@ class MusicControlView(ui.View):
             vc.source.volume = new_volume
         
         await interaction.response.send_message(
-            f"🔉 Volume: **{int(new_volume * 100)}%**", 
+            f"<:vd:1468742767206203534> Volume: **{int(new_volume * 100)}%**", 
             ephemeral=True
         )
     
-    @ui.button(emoji="🔊", style=discord.ButtonStyle.secondary, row=1)
+    @ui.button(emoji="<:vu:1468742766639972423>", style=discord.ButtonStyle.secondary, row=1)
     async def volume_up_button(self, interaction: discord.Interaction, button: ui.Button):
         """Increase volume."""
         if not await self._check_voice(interaction):
@@ -215,7 +215,7 @@ class MusicControlView(ui.View):
             vc.source.volume = new_volume
         
         await interaction.response.send_message(
-            f"🔊 Volume: **{int(new_volume * 100)}%**", 
+            f"<:vu:1468742766639972423> Volume: **{int(new_volume * 100)}%**", 
             ephemeral=True
         )
 
@@ -327,7 +327,7 @@ class AutoplayPreviewView(ui.View):
             vc.stop()
         
         await interaction.response.send_message(
-            f"⏭️ Jumping to: **{target_song.title}**",
+            f"<:sk:1468742764165337280> Jumping to: **{target_song.title}**",
             ephemeral=True
         )
     
@@ -374,7 +374,7 @@ class NowPlayingView(ui.View):
         # Play/Pause
         is_paused = state.voice_client and state.voice_client.is_paused()
         play_pause = ui.Button(
-            emoji="▶️" if is_paused else "⏸️",
+            emoji="▶️" if is_paused else "<:pa:1468742763129344184>",
             style=discord.ButtonStyle.success if is_paused else discord.ButtonStyle.secondary,
             custom_id="play_pause",
             row=0
@@ -383,37 +383,37 @@ class NowPlayingView(ui.View):
         self.add_item(play_pause)
         
         # Skip
-        skip = ui.Button(emoji="⏭️", style=discord.ButtonStyle.primary, custom_id="skip", row=0)
+        skip = ui.Button(emoji="<:sk:1468742764165337280>", style=discord.ButtonStyle.primary, custom_id="skip", row=0)
         skip.callback = self._skip_callback
         self.add_item(skip)
         
         # Stop
-        stop = ui.Button(emoji="⏹️", style=discord.ButtonStyle.danger, custom_id="stop", row=0)
+        stop = ui.Button(emoji="<:st:1468742765327286426>", style=discord.ButtonStyle.danger, custom_id="stop", row=0)
         stop.callback = self._stop_callback
         self.add_item(stop)
         
         # Shuffle
-        shuffle = ui.Button(emoji="🔀", style=discord.ButtonStyle.secondary, custom_id="shuffle", row=0)
+        shuffle = ui.Button(emoji="<:sh:1468742768540127302>", style=discord.ButtonStyle.secondary, custom_id="shuffle", row=0)
         shuffle.callback = self._shuffle_callback
         self.add_item(shuffle)
         
         # Loop
         loop_styles = {
-            "off": (discord.ButtonStyle.secondary, "🔁"),
-            "song": (discord.ButtonStyle.primary, "🔂"),
-            "queue": (discord.ButtonStyle.success, "🔁"),
+            "off": (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>"),
+            "song": (discord.ButtonStyle.primary, "<:ra:1468742761548349753>"),
+            "queue": (discord.ButtonStyle.success, "<:ra:1468742761548349753>"),
         }
-        style, emoji = loop_styles.get(state.loop_mode, (discord.ButtonStyle.secondary, "🔁"))
+        style, emoji = loop_styles.get(state.loop_mode, (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>"))
         loop = ui.Button(emoji=emoji, style=style, custom_id="loop", row=0)
         loop.callback = self._loop_callback
         self.add_item(loop)
         
         # Row 1: Volume and autoplay controls
-        vol_down = ui.Button(emoji="🔉", style=discord.ButtonStyle.secondary, custom_id="vol_down", row=1)
+        vol_down = ui.Button(emoji="<:vd:1468742767206203534>", style=discord.ButtonStyle.secondary, custom_id="vol_down", row=1)
         vol_down.callback = self._volume_down_callback
         self.add_item(vol_down)
         
-        vol_up = ui.Button(emoji="🔊", style=discord.ButtonStyle.secondary, custom_id="vol_up", row=1)
+        vol_up = ui.Button(emoji="<:vu:1468742766639972423>", style=discord.ButtonStyle.secondary, custom_id="vol_up", row=1)
         vol_up.callback = self._volume_up_callback
         self.add_item(vol_up)
         
@@ -436,11 +436,11 @@ class NowPlayingView(ui.View):
             self.add_item(upcoming)
 
         # Row 2: Vexo Voting
-        upvote = ui.Button(emoji="👍", style=discord.ButtonStyle.secondary, custom_id="upvote", row=2)
+        upvote = ui.Button(emoji="<:li:1468742770356257029>", style=discord.ButtonStyle.secondary, custom_id="upvote", row=2)
         upvote.callback = self._upvote_callback
         self.add_item(upvote)
 
-        downvote = ui.Button(emoji="👎", style=discord.ButtonStyle.secondary, custom_id="downvote", row=2)
+        downvote = ui.Button(emoji="<:dl:1468742771337597140>", style=discord.ButtonStyle.secondary, custom_id="downvote", row=2)
         downvote.callback = self._downvote_callback
         self.add_item(downvote)
     
@@ -499,7 +499,7 @@ class NowPlayingView(ui.View):
             await interaction.response.send_message(f"▶️ **{interaction.user.display_name}** resumed playback")
         elif vc.is_playing():
             vc.pause()
-            await interaction.response.send_message(f"⏸️ **{interaction.user.display_name}** paused playback")
+            await interaction.response.send_message(f"<:pa:1468742763129344184> **{interaction.user.display_name}** paused playback")
         else:
             # Nothing playing - try to play a suggested song
             song_to_play = None
@@ -542,7 +542,7 @@ class NowPlayingView(ui.View):
                 )
                 
             vc.stop()
-            await interaction.response.send_message(f"⏭️ **{interaction.user.display_name}** skipped: **{title}**")
+            await interaction.response.send_message(f"<:sk:1468742764165337280> **{interaction.user.display_name}** skipped: **{title}**")
         else:
             await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
     
@@ -563,7 +563,7 @@ class NowPlayingView(ui.View):
         if vc.is_playing() or vc.is_paused():
             vc.stop()
         
-        await interaction.response.send_message(f"⏹️ **{interaction.user.display_name}** stopped playback and cleared queue.")
+        await interaction.response.send_message(f"<:st:1468742765327286426> **{interaction.user.display_name}** stopped playback and cleared queue.")
     
     async def _shuffle_callback(self, interaction: discord.Interaction):
         """Shuffle the queue."""
@@ -578,7 +578,7 @@ class NowPlayingView(ui.View):
             return
         
         random.shuffle(state.queue)
-        await interaction.response.send_message(f"🔀 Shuffled {len(state.queue)} songs!", ephemeral=True)
+        await interaction.response.send_message(f"<:sh:1468742768540127302> Shuffled {len(state.queue)} songs!", ephemeral=True)
     
     async def _loop_callback(self, interaction: discord.Interaction):
         """Cycle loop modes."""
@@ -592,8 +592,8 @@ class NowPlayingView(ui.View):
         
         messages = {
             "off": "🚫 Loop disabled",
-            "song": "🔂 Looping current song",
-            "queue": "🔁 Looping entire queue"
+            "song": "<:ra:1468742761548349753> Looping current song",
+            "queue": "<:ra:1468742761548349753> Looping entire queue"
         }
         await interaction.response.send_message(f"{messages[state.loop_mode]} (by **{interaction.user.display_name}**)") 
     
@@ -610,7 +610,7 @@ class NowPlayingView(ui.View):
         if vc and vc.source:
             vc.source.volume = state.volume
         
-        await interaction.response.send_message(f"🔉 Volume: **{int(state.volume * 100)}%**", ephemeral=True)
+        await interaction.response.send_message(f"<:vd:1468742767206203534> Volume: **{int(state.volume * 100)}%**", ephemeral=True)
     
     async def _volume_up_callback(self, interaction: discord.Interaction):
         """Increase volume."""
@@ -625,7 +625,7 @@ class NowPlayingView(ui.View):
         if vc and vc.source:
             vc.source.volume = state.volume
         
-        await interaction.response.send_message(f"🔊 Volume: **{int(state.volume * 100)}%**", ephemeral=True)
+        await interaction.response.send_message(f"<:vu:1468742766639972423> Volume: **{int(state.volume * 100)}%**", ephemeral=True)
     
     async def _autoplay_callback(self, interaction: discord.Interaction):
         """Toggle autoplay."""
@@ -676,7 +676,7 @@ class NowPlayingView(ui.View):
             state.current.webpage_url, 
             "upvote"
         )
-        await interaction.response.send_message(f"👍 **{interaction.user.display_name}** liked this song!", ephemeral=True)
+        await interaction.response.send_message(f"<:li:1468742770356257029> **{interaction.user.display_name}** liked this song!", ephemeral=True)
 
     async def _downvote_callback(self, interaction: discord.Interaction):
         """Record a downvote."""
@@ -691,4 +691,4 @@ class NowPlayingView(ui.View):
             state.current.webpage_url, 
             "downvote"
         )
-        await interaction.response.send_message(f"👎 **{interaction.user.display_name}** disliked this song!", ephemeral=True)
+        await interaction.response.send_message(f"<:dl:1468742771337597140> **{interaction.user.display_name}** disliked this song!", ephemeral=True)
