@@ -1,6 +1,6 @@
 import logging
 import random
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Set
 from database import db
 from config import Config
 from utils.logger import set_logger
@@ -26,7 +26,13 @@ class DiscoveryEngine:
         """Set the last person who interacted with the bot in this guild."""
         self.session_interactors[guild_id] = discord_id
 
-    async def build_user_slots(self, user_id: int, guild_id: int, count: int = 4) -> List[Dict[str, Any]]:
+    async def build_user_slots(
+        self,
+        user_id: int,
+        guild_id: int,
+        count: int = 4,
+        disallow_urls: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
         """
         Build slots for a single user.
         
@@ -45,7 +51,7 @@ class DiscoveryEngine:
             return []
         
         slots = []
-        used_urls = set()
+        used_urls = set(disallow_urls or set())
         
         # 1. Pick from directly liked songs (up to count/2)
         liked_count = count // 2
@@ -144,6 +150,7 @@ class DiscoveryEngine:
         
         public_by_user = {}
         hidden_by_user = {}
+        global_used: Set[str] = set()
         
         for user_id in user_ids:
             # Skip users without preferences
@@ -151,8 +158,8 @@ class DiscoveryEngine:
                 logger.debug(f"User {user_id} has no preferences, skipping.")
                 continue
             
-            # Build 4 slots for this user
-            slots = await self.build_user_slots(user_id, guild_id, count=4)
+            # Build 4 slots for this user (avoid duplicates across users)
+            slots = await self.build_user_slots(user_id, guild_id, count=4, disallow_urls=global_used)
             
             if not slots:
                 continue
@@ -160,6 +167,10 @@ class DiscoveryEngine:
             # First 2 → public, next 2 → hidden
             public_by_user[user_id] = slots[:2]
             hidden_by_user[user_id] = slots[2:4]
+            for s in slots:
+                url = s.get('url')
+                if url:
+                    global_used.add(url)
         
         # Interleave for fairness (round-robin by user)
         public = self._interleave_slots(public_by_user)

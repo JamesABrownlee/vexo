@@ -354,7 +354,8 @@ class Music(commands.Cog):
                 )
                 
                 # Check for duplicates in current session
-                if any(s.url == song.url for s in state.queue + state.total_autoplay):
+                song_key = song.webpage_url or song.url
+                if song_key and any((s.webpage_url or s.url) == song_key for s in state.queue + state.total_autoplay):
                     continue
                 
                 # Fill balance: first to visible until 5, then hidden
@@ -490,7 +491,8 @@ class Music(commands.Cog):
         # 1. Record History
         if state.current:
             asyncio.run_coroutine_threadsafe(
-                db.add_to_history(guild_id, state.current.author, state.current.title, state.current.url),
+                # Store stable URL for "recently played" checks (Song.url can be a temporary stream URL)
+                db.add_to_history(guild_id, state.current.author, state.current.title, state.current.webpage_url or state.current.url),
                 self.bot.loop
             )
         
@@ -638,15 +640,30 @@ class Music(commands.Cog):
                     if similar:
                         # Replace a random hidden song (index 5-9 in logical session list)
                         idx = random.randint(0, len(state.autoplay_hidden)-1)
-                        old = state.autoplay_hidden[idx]
-                        state.autoplay_hidden[idx] = Song(
-                            title=similar['song'],
-                            url=similar['url'],
-                            webpage_url=similar['url'],
-                            duration=0,
-                            author=similar['artist']
-                        )
-                        logger.info(f"Mood Refresh: Swapped hidden '{old.title}' for '{state.autoplay_hidden[idx].title}' (Mood relevance).")
+                        new_key = similar.get('url')
+                        existing_keys = set()
+                        # Exclude the slot we're about to replace so a no-op replacement is allowed.
+                        for s in state.queue + state.autoplay_visible + [h for i, h in enumerate(state.autoplay_hidden) if i != idx]:
+                            k = s.webpage_url or s.url
+                            if k:
+                                existing_keys.add(k)
+                        if state.current:
+                            k = state.current.webpage_url or state.current.url
+                            if k:
+                                existing_keys.add(k)
+
+                        if new_key and new_key in existing_keys:
+                            logger.debug(f"Mood Refresh: Skipping duplicate suggestion '{similar.get('song')}'")
+                        else:
+                            old = state.autoplay_hidden[idx]
+                            state.autoplay_hidden[idx] = Song(
+                                title=similar['song'],
+                                url=similar['url'],
+                                webpage_url=similar['url'],
+                                duration=0,
+                                author=similar['artist']
+                            )
+                            logger.info(f"Mood Refresh: Swapped hidden '{old.title}' for '{state.autoplay_hidden[idx].title}' (Mood relevance).")
                     
             except Exception as e:
                 logger.error(f"Error playing song '{song.title}': {e}")
