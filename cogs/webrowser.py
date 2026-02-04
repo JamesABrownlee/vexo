@@ -4,6 +4,7 @@ Provides a web dashboard for viewing logs and managing settings.
 """
 import asyncio
 import logging
+import time
 import discord
 from discord.ext import commands
 from aiohttp import web
@@ -13,6 +14,7 @@ from collections import deque
 from typing import Optional
 
 from utils.logger import set_logger
+from utils.spotify import check_connectivity as spotify_check_connectivity
 
 logger = set_logger(logging.getLogger('MusicBot.WebServer'))
 
@@ -70,6 +72,10 @@ class WebServer(commands.Cog):
         self.app.router.add_get('/settings', self.get_settings)
         self.app.router.add_post('/settings', self.update_settings)
         self.app.router.add_get('/status', self.get_status)
+        self.app.router.add_get('/spotify/test', self.spotify_test)
+
+        # Simple cache to avoid hammering the Spotify API from repeated clicks/refreshes
+        self._spotify_check_cache = {"at": 0.0, "result": None}
         
         # Start web server
         self.bot.loop.create_task(self.start_server())
@@ -225,7 +231,7 @@ class WebServer(commands.Cog):
             </div>
             <div class="card">
                 <h2>🎛️ Quick Actions</h2>
-                <div style="padding: 10px 0;">
+                <div id="quickActions" style="padding: 10px 0;">
                     <button class="btn" onclick="window.location.href='/settings'">⚙️ Settings</button>
                     <button class="btn" onclick="clearLogs()">🗑️ Clear Logs</button>
                     <button class="btn" onclick="toggleStream(this)">⏸️ Pause Stream</button>
@@ -254,12 +260,34 @@ class WebServer(commands.Cog):
         let eventSource = null;
         let allLogs = [];
         let moduleSet = new Set();
+        const MAX_UI_LOGS = 1000;
+        let pendingHtml = '';
+        let flushHandle = null;
+
+        // Add Spotify connectivity test button
+        const quickActions = document.getElementById('quickActions');
+        if (quickActions) {
+            const btn = document.createElement('button');
+            btn.className = 'btn';
+            btn.textContent = 'Test Spotify';
+            btn.onclick = () => testSpotify(btn);
+            quickActions.appendChild(btn);
+
+            const result = document.createElement('div');
+            result.id = 'spotifyTestResult';
+            result.style.padding = '6px 0';
+            result.style.color = '#888';
+            quickActions.parentElement.appendChild(result);
+        }
         
         // Load initial logs
         fetch('/logs')
             .then(r => r.json())
             .then(data => {
                 allLogs = data.logs;
+                if (allLogs.length > MAX_UI_LOGS) {
+                    allLogs = allLogs.slice(-MAX_UI_LOGS);
+                }
                 updateModuleOptions();
                 renderLogs();
                 scrollToBottom();
@@ -279,6 +307,9 @@ class WebServer(commands.Cog):
                 if (!streaming) return;
                 const log = JSON.parse(event.data);
                 allLogs.push(log);
+                if (allLogs.length > MAX_UI_LOGS) {
+                    allLogs.splice(0, allLogs.length - MAX_UI_LOGS);
+                }
                 if (!moduleSet.has(log.name)) {
                     moduleSet.add(log.name);
                     updateModuleOptions();
@@ -315,11 +346,28 @@ class WebServer(commands.Cog):
         function appendLog(log) {
             const selected = document.getElementById('moduleFilter').value;
             if (selected && log.name !== selected) return;
+            pendingHtml += formatLog(log);
+            scheduleFlush();
+        }
+
+        function scheduleFlush() {
+            if (flushHandle !== null) return;
+            flushHandle = setTimeout(() => {
+                flushHandle = null;
+                flushPending();
+            }, 150);
+        }
+
+        function flushPending() {
+            if (!pendingHtml) return;
             const logsDiv = document.getElementById('logs');
-            logsDiv.innerHTML += formatLog(log);
-            if (logsDiv.scrollHeight - logsDiv.scrollTop < 700) {
-                scrollToBottom();
+            const nearBottom = (logsDiv.scrollHeight - logsDiv.scrollTop) < 700;
+            logsDiv.insertAdjacentHTML('beforeend', pendingHtml);
+            pendingHtml = '';
+            while (logsDiv.children.length > MAX_UI_LOGS) {
+                logsDiv.removeChild(logsDiv.firstElementChild);
             }
+            if (nearBottom) scrollToBottom();
         }
 
         function renderLogs() {
@@ -329,6 +377,7 @@ class WebServer(commands.Cog):
                 ? allLogs.filter(l => l.name === selected)
                 : allLogs;
             logsDiv.innerHTML = filtered.map(formatLog).join('');
+            pendingHtml = '';
         }
 
         function applyFilter() {
@@ -360,9 +409,14 @@ class WebServer(commands.Cog):
         }
         
         function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            const s = String(text ?? '');
+            return s.replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;',
+            }[ch]));
         }
         
         function scrollToBottom() {
@@ -370,6 +424,54 @@ class WebServer(commands.Cog):
             logsDiv.scrollTop = logsDiv.scrollHeight;
         }
         
+        function testSpotify(btn) {
+            const out = document.getElementById('spotifyTestResult');
+            if (out) {
+                out.textContent = 'Testing Spotify...';
+                out.style.color = '#888';
+            }
+
+            const originalText = btn ? btn.textContent : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Testing...';
+            }
+
+            fetch('/spotify/test')
+                .then(r => r.json())
+                .then(data => {
+                    if (!out) return;
+
+                    if (data.ok) {
+                        let msg = `Spotify OK (${data.latency_ms}ms${data.cached ? ', cached' : ''})`;
+                        if (data.sample && (data.sample.artist || data.sample.track)) {
+                            const artist = data.sample.artist || '';
+                            const track = data.sample.track || '';
+                            const sample = [artist, track].filter(Boolean).join(' - ');
+                            if (sample) msg += ` — ${sample}`;
+                        }
+                        if (data.checked_at) msg += ` @ ${data.checked_at}`;
+                        out.textContent = msg;
+                        out.style.color = '#00FF88';
+                    } else {
+                        const err = data.error || 'Unknown error';
+                        out.textContent = `Spotify FAIL: ${err}${data.checked_at ? ' @ ' + data.checked_at : ''}`;
+                        out.style.color = '#FF3366';
+                    }
+                })
+                .catch(err => {
+                    if (!out) return;
+                    out.textContent = `Spotify test error: ${err}`;
+                    out.style.color = '#FF3366';
+                })
+                .finally(() => {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = originalText || 'Test Spotify';
+                    }
+                });
+        }
+
         function toggleStream(btn) {
             streaming = !streaming;
             btn.textContent = streaming ? '⏸️ Pause Stream' : '▶️ Resume Stream';
@@ -377,7 +479,10 @@ class WebServer(commands.Cog):
         
         function clearLogs() {
             if (confirm('Clear all logs from view?')) {
-                document.getElementById('logs').innerHTML = '';
+                allLogs = [];
+                moduleSet = new Set();
+                updateModuleOptions();
+                renderLogs();
             }
         }
         
@@ -456,6 +561,30 @@ class WebServer(commands.Cog):
             pass
 
         return response
+
+    async def spotify_test(self, request):
+        """Test Spotify connectivity using client credentials."""
+        now = time.monotonic()
+        cached = False
+        cached_result = self._spotify_check_cache.get("result")
+        if cached_result and (now - float(self._spotify_check_cache.get("at", 0.0))) < 5.0:
+            cached = True
+            result = dict(cached_result)
+            latency_ms = 0
+        else:
+            start = time.monotonic()
+            # spotipy is synchronous; run in a thread so we don't block the aiohttp loop
+            result = await asyncio.to_thread(spotify_check_connectivity)
+            latency_ms = int((time.monotonic() - start) * 1000)
+            self._spotify_check_cache = {"at": now, "result": result}
+
+        payload = {
+            **(result or {}),
+            "cached": cached,
+            "latency_ms": latency_ms,
+            "checked_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        return web.json_response(payload)
     
     async def get_status(self, request):
         """Get bot status information."""

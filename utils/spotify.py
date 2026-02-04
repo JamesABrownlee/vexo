@@ -4,10 +4,11 @@ Spotify helpers for playlist retrieval.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.exceptions import SpotifyException
 
 from config import Config
 from utils.logger import set_logger
@@ -90,3 +91,36 @@ def fetch_playlist_tracks(value: str, limit: Optional[int] = None) -> Tuple[str,
             break
 
     return name, tracks, total
+
+
+def check_connectivity(query: str = "vexo") -> Dict[str, Any]:
+    """
+    Lightweight connectivity test for Spotify using client credentials.
+    Returns a dict suitable for JSON responses: {ok: bool, error?: str, sample?: {...}}
+    """
+    client = _get_client()
+    if not client:
+        return {"ok": False, "error": "Spotify credentials are not configured."}
+
+    try:
+        result = client.search(q=query, type="track", limit=1)
+        items = ((result or {}).get("tracks") or {}).get("items") or []
+        sample = None
+        if items:
+            track = items[0] or {}
+            artists = track.get("artists") or []
+            sample = {
+                "track": track.get("name"),
+                "artist": (artists[0] or {}).get("name") if artists else None,
+            }
+        return {"ok": True, "sample": sample}
+    except SpotifyException as exc:
+        status = getattr(exc, "http_status", None)
+        msg = getattr(exc, "msg", None) or str(exc)
+        logger.error(f"Spotify connectivity check failed: {status} {msg}")
+        if status:
+            return {"ok": False, "error": f"Spotify API error {status}: {msg}"}
+        return {"ok": False, "error": f"Spotify API error: {msg}"}
+    except Exception as exc:
+        logger.error(f"Spotify connectivity check failed: {exc}")
+        return {"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}
