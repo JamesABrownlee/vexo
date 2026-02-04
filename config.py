@@ -58,8 +58,8 @@ class Config:
         'youtube_include_dash_manifest': False,
     }
     
-    # FFmpeg buffer size (default 512k for smoother playback)
-    FFMPEG_BUFFER_SIZE: str = os.getenv("FFMPEG_BUFFER_SIZE", "512k")
+    # FFmpeg buffer size (default 2048k for smoother playback)
+    FFMPEG_BUFFER_SIZE: str = os.getenv("FFMPEG_BUFFER_SIZE", "2048k")
     
     @property
     def ffmpeg_options(cls):
@@ -69,8 +69,8 @@ class Config:
                 '-reconnect 1 '
                 '-reconnect_streamed 1 '
                 '-reconnect_delay_max 5 '
-                '-analyzeduration 20000000 '  # 20 seconds of analysis
-                '-probesize 20000000 '        # 20MB probe size
+                '-analyzeduration 50000000 '  # 50 seconds of analysis
+                '-probesize 50000000 '        # 50MB probe size
                 '-fflags +discardcorrupt '    # Discard corrupt packets
             ),
             'options': f'-vn -bufsize {cls.FFMPEG_BUFFER_SIZE}'
@@ -82,11 +82,11 @@ class Config:
             '-reconnect 1 '
             '-reconnect_streamed 1 '
             '-reconnect_delay_max 5 '
-            '-analyzeduration 20000000 '
-            '-probesize 20000000 '
+            '-analyzeduration 50000000 '
+            '-probesize 50000000 '
             '-fflags +discardcorrupt '
         ),
-        'options': f'-vn -bufsize {os.getenv("FFMPEG_BUFFER_SIZE", "512k")}'
+        'options': f'-vn -bufsize {os.getenv("FFMPEG_BUFFER_SIZE", "2048k")}'
     }
     
     @classmethod

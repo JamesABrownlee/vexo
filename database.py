@@ -55,7 +55,7 @@ class Database:
                 )
             ''')
             
-            # 4. Current Session Playlist
+            # 4. Current Session Playlist (legacy)
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS current_session_plist (
                     guild_id INTEGER,
@@ -77,6 +77,28 @@ class Database:
                     value TEXT,
                     PRIMARY KEY (guild_id, key)
                 )
+            ''')
+            
+            # 6. Session Queue (per-user autoplay slots)
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS session_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER,
+                    queue_type TEXT,
+                    user_id INTEGER,
+                    slot_type TEXT,
+                    artist TEXT,
+                    song TEXT,
+                    url TEXT,
+                    position INTEGER,
+                    request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Create index for faster lookups
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_session_queue_guild 
+                ON session_queue(guild_id, queue_type)
             ''')
 
             # --- Robust Migration Logic ---
@@ -270,6 +292,77 @@ class Database:
                         except: pass
                     settings[key] = val
                 return settings
+
+    # --- Session Queue Methods (per-user autoplay slots) ---
+    
+    async def get_session_queue(self, guild_id: int, queue_type: str) -> List[Dict[str, Any]]:
+        """Get the session queue for a guild by type (public/hidden/requested)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('''
+                SELECT * FROM session_queue 
+                WHERE guild_id = ? AND queue_type = ?
+                ORDER BY position ASC
+            ''', (guild_id, queue_type)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def save_session_queue(self, guild_id: int, queue_type: str, items: List[Dict[str, Any]]):
+        """Save/replace the session queue for a guild by type."""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Clear existing
+            await db.execute(
+                'DELETE FROM session_queue WHERE guild_id = ? AND queue_type = ?',
+                (guild_id, queue_type)
+            )
+            # Insert new items
+            for i, item in enumerate(items):
+                await db.execute('''
+                    INSERT INTO session_queue 
+                    (guild_id, queue_type, user_id, slot_type, artist, song, url, position, request_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    guild_id, queue_type, 
+                    item.get('user_id'), item.get('slot_type', 'discovery'),
+                    item.get('artist'), item.get('song'), item.get('url'),
+                    i, item.get('request_time')
+                ))
+            await db.commit()
+
+    async def remove_user_from_session_queue(self, guild_id: int, user_id: int):
+        """Remove all slots belonging to a specific user from both queues."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                'DELETE FROM session_queue WHERE guild_id = ? AND user_id = ?',
+                (guild_id, user_id)
+            )
+            await db.commit()
+            logger.info(f"Removed user {user_id} slots from session queue in guild {guild_id}")
+
+    async def clear_session_queue(self, guild_id: int):
+        """Clear all session queue entries for a guild."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('DELETE FROM session_queue WHERE guild_id = ?', (guild_id,))
+            await db.commit()
+
+    async def get_user_liked_artists(self, user_id: int) -> List[str]:
+        """Get list of artists the user has positively scored."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute('''
+                SELECT DISTINCT artist FROM user_preferences 
+                WHERE user_id = ? AND score > 0
+            ''', (user_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [row[0].lower() for row in rows if row[0]]
+
+    async def has_preferences(self, user_id: int) -> bool:
+        """Check if a user has any preferences recorded."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                'SELECT 1 FROM user_preferences WHERE user_id = ? LIMIT 1',
+                (user_id,)
+            ) as cursor:
+                return await cursor.fetchone() is not None
 
 # Global instance
 db = Database()

@@ -1343,7 +1343,7 @@ class Music(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState
     ):
-        """Handle voice state changes."""
+        """Handle voice state changes - manage per-user autoplay slots."""
         if member.bot:
             return
         
@@ -1353,23 +1353,39 @@ class Music(commands.Cog):
         
         state = self.get_state(member.guild.id)
         
-        if vc.channel:
-            # Trigger discovery check on joins/leaves
-            logger.info(f"Voice State Update: User {member.name} {'joined' if after.channel else 'left'} {vc.channel.name}")
+        # Check if user left the bot's channel
+        user_left = before.channel == vc.channel and after.channel != vc.channel
+        user_joined = before.channel != vc.channel and after.channel == vc.channel
+        
+        if user_left:
+            logger.info(f"Voice State: User {member.name} left {vc.channel.name}")
             
-            # If someone left, clear any songs that were only in there because of them?
-            # Actually, simpler: just trigger a partial refill/refresh
-            if state.is_autoplay:
-                asyncio.create_task(self._refill_autoplay_buffer(member.guild.id))
-
-            if len(vc.channel.members) == 1:
-                if not state.is_24_7:
-                    state.queue.clear()
-                    state.autoplay_visible.clear()
-                    state.autoplay_hidden.clear()
-                    state.current = None
-                    await vc.disconnect()
-                    logger.info(f"Auto-Disconnect: VC empty in guild {member.guild.id}.")
+            # Remove this user's slots from autoplay queues
+            state.autoplay_visible = [s for s in state.autoplay_visible 
+                                       if not hasattr(s, 'user_id') or s.user_id != member.id]
+            state.autoplay_hidden = [s for s in state.autoplay_hidden 
+                                      if not hasattr(s, 'user_id') or s.user_id != member.id]
+            
+            # Also remove from DB
+            await db.remove_user_from_session_queue(member.guild.id, member.id)
+            
+            logger.info(f"Removed {member.name}'s slots from autoplay queues")
+        
+        elif user_joined and state.is_autoplay:
+            logger.info(f"Voice State: User {member.name} joined {vc.channel.name}")
+            # Trigger refill to add their slots to hidden queue
+            asyncio.create_task(self._refill_autoplay_buffer(member.guild.id))
+        
+        # Auto-disconnect if VC is empty (only bot left)
+        if vc.channel and len(vc.channel.members) == 1:
+            if not state.is_24_7:
+                state.queue.clear()
+                state.autoplay_visible.clear()
+                state.autoplay_hidden.clear()
+                state.current = None
+                await db.clear_session_queue(member.guild.id)
+                await vc.disconnect()
+                logger.info(f"Auto-Disconnect: VC empty in guild {member.guild.id}.")
 
 
 async def setup(bot: commands.Bot):
