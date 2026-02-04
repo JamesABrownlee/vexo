@@ -1,7 +1,7 @@
 services:
   # Vexo Smart Discord Music Bot
   vexo:
-    build: .
+    image: ghcr.io/jamesabrownlee/vexo:latest
     container_name: vexo
     restart: unless-stopped
     environment:
@@ -12,3 +12,19 @@ services:
       - DATABASE_PATH=/app/data/vexo.db
     volumes:
       - ./data:/app/data
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Watchtower - Auto-update containers
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_LABEL_ENABLE=true
+      - DOCKER_API_VERSION=1.44
+    command: --cleanup --label-enable

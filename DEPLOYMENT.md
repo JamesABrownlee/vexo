@@ -27,22 +27,38 @@ mkdir vexo && cd vexo
 
 ```yaml
 services:
+  # Vexo Smart Discord Music Bot
   vexo:
     image: ghcr.io/jamesabrownlee/vexo:latest
     container_name: vexo
     restart: unless-stopped
     environment:
       - DISCORD_TOKEN=your_discord_token_here
-      - DATABASE_PATH=/app/data/vexo.db
-      # Optional settings:
       - DEFAULT_VOLUME=50
-      - YTDL_PO_TOKEN=your_po_token_here
-      - FALLBACK_PLAYLIST=https://youtube.com/playlist?list=YOUR_PLAYLIST_ID
-      - FFMPEG_BUFFER_SIZE=1M
       - YTDL_COOKIES_PATH=/app/data/cookies.txt
+      - YTDL_PO_TOKEN=your_po_token_here
+      - DATABASE_PATH=/app/data/vexo.db
     volumes:
       - ./data:/app/data
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Watchtower - Auto-update containers
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_LABEL_ENABLE=true
+      - DOCKER_API_VERSION=1.44
+    command: --cleanup --label-enable
 ```
+
+**Note:** Watchtower will automatically check for updates every 5 minutes and update the vexo container when a new image is pushed.
 
 ### 3. Deploy
 
