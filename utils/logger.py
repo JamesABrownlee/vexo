@@ -68,8 +68,13 @@ def set_logger(logger, filename=None):
         file_handler.setFormatter(PlainFormatter())
         logger.addHandler(file_handler)
 
-    return logger
+    # Attach web dashboard log handler if present on root
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if handler.__class__.__name__ == "LogHandler" and handler not in logger.handlers:
+            logger.addHandler(handler)
 
+    return logger
 
 def get_last_log_lines(count: int = 500) -> str:
     """Read the last N lines from the log file."""
@@ -82,4 +87,5 @@ def get_last_log_lines(count: int = 500) -> str:
             return ''.join(lines[-count:])
     except Exception as e:
         return f"Error reading logs: {e}"
+
 

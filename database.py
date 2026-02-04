@@ -101,6 +101,45 @@ class Database:
                 ON session_queue(guild_id, queue_type)
             ''')
 
+            # 7. Playlists (global / guild / user)
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS playlists (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope TEXT NOT NULL,
+                    guild_id INTEGER,
+                    user_id INTEGER,
+                    name TEXT,
+                    genre TEXT,
+                    source TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_playlists_scope
+                ON playlists(scope)
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_playlists_user
+                ON playlists(user_id)
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_playlists_guild
+                ON playlists(guild_id)
+            ''')
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS playlist_hidden (
+                    user_id INTEGER,
+                    playlist_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, playlist_id)
+                )
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_playlist_hidden_user
+                ON playlist_hidden(user_id)
+            ''')
+
             # --- Robust Migration Logic ---
             
             # Special migration: Recreate user_preferences with proper PRIMARY KEY if needed
@@ -164,7 +203,8 @@ class Database:
             tables = {
                 "guild_autoplay_plist": ["guild_id", "artist", "song", "url"],
                 "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"],
-                "guild_settings": ["guild_id", "key", "value"]
+                "guild_settings": ["guild_id", "key", "value"],
+                "playlists": ["scope", "guild_id", "user_id", "name", "genre", "source", "url", "created_at"]
             }
 
             for table, expected_cols in tables.items():
@@ -363,6 +403,116 @@ class Database:
                 (user_id,)
             ) as cursor:
                 return await cursor.fetchone() is not None
+
+    # --- Playlist Methods ---
+
+    async def add_playlist(
+        self,
+        scope: str,
+        url: str,
+        source: str,
+        user_id: Optional[int] = None,
+        guild_id: Optional[int] = None,
+        name: Optional[str] = None,
+        genre: Optional[str] = None
+    ) -> int:
+        """Add a playlist and return its ID."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute('''
+                INSERT INTO playlists (scope, guild_id, user_id, name, genre, source, url)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (scope, guild_id, user_id, name, genre, source, url))
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_playlist_by_id(self, playlist_id: int) -> Optional[Dict[str, Any]]:
+        """Get a playlist by ID."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('SELECT * FROM playlists WHERE id = ?', (playlist_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def get_playlists_for_user(self, user_id: int, guild_id: int, limit: int = 25) -> List[Dict[str, Any]]:
+        """
+        Get playlists in preferred order:
+        1) User playlists
+        2) Guild playlists
+        3) Global playlists
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('''
+                SELECT * FROM playlists
+                WHERE (
+                    (scope = 'user' AND user_id = ?)
+                    OR (scope = 'guild' AND guild_id = ?)
+                    OR (scope = 'global')
+                )
+                AND id NOT IN (
+                    SELECT playlist_id FROM playlist_hidden WHERE user_id = ?
+                )
+                ORDER BY
+                    CASE scope
+                        WHEN 'user' THEN 0
+                        WHEN 'guild' THEN 1
+                        ELSE 2
+                    END,
+                    datetime(created_at) DESC
+                LIMIT ?
+            ''', (user_id, guild_id, user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def delete_user_playlist(self, playlist_id: int, user_id: int) -> bool:
+        """Delete a user-scoped playlist owned by the user."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute('''
+                DELETE FROM playlists
+                WHERE id = ? AND scope = 'user' AND user_id = ?
+            ''', (playlist_id, user_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def delete_guild_playlist(self, playlist_id: int, guild_id: int) -> bool:
+        """Delete a guild-scoped playlist for a guild."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute('''
+                DELETE FROM playlists
+                WHERE id = ? AND scope = 'guild' AND guild_id = ?
+            ''', (playlist_id, guild_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def hide_playlist_for_user(self, playlist_id: int, user_id: int) -> bool:
+        """Hide a playlist from a user's personal options."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute('''
+                INSERT OR IGNORE INTO playlist_hidden (user_id, playlist_id)
+                VALUES (?, ?)
+            ''', (user_id, playlist_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_genre_suggestions(self, user_id: int, guild_id: int, limit: int = 25) -> List[str]:
+        """Get distinct genre suggestions visible to the user."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute('''
+                SELECT DISTINCT genre FROM playlists
+                WHERE genre IS NOT NULL AND genre != ''
+                  AND (
+                    (scope = 'user' AND user_id = ?)
+                    OR (scope = 'guild' AND guild_id = ?)
+                    OR (scope = 'global')
+                  )
+                  AND id NOT IN (
+                    SELECT playlist_id FROM playlist_hidden WHERE user_id = ?
+                  )
+                ORDER BY genre ASC
+                LIMIT ?
+            ''', (user_id, guild_id, user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [row[0] for row in rows if row and row[0]]
 
 # Global instance
 db = Database()

@@ -23,10 +23,13 @@ class LogHandler(logging.Handler):
     def __init__(self, max_logs=1000):
         super().__init__()
         self.logs = deque(maxlen=max_logs)
+        self._seq = 0
         
     def emit(self, record):
         try:
+            self._seq += 1
             log_entry = {
+                'id': self._seq,
                 'timestamp': datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S'),
                 'level': record.levelname,
                 'name': record.name,
@@ -50,10 +53,15 @@ class WebServer(commands.Cog):
         # Set up log handler
         self.log_handler = LogHandler(max_logs=1000)
         self.log_handler.setLevel(logging.DEBUG)
+        self.log_handler.setFormatter(logging.Formatter("%(message)s"))
         
-        # Attach to root logger to catch all logs
+        # Attach to root logger and existing loggers to catch all logs
         root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
         root_logger.addHandler(self.log_handler)
+        for log_obj in logging.Logger.manager.loggerDict.values():
+            if isinstance(log_obj, logging.Logger) and self.log_handler not in log_obj.handlers:
+                log_obj.addHandler(self.log_handler)
         
         # Set up routes
         self.app.router.add_get('/', self.index)
@@ -187,6 +195,19 @@ class WebServer(commands.Cog):
             display: flex;
             gap: 10px;
         }
+        .filter-row {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        select {
+            background: #0f0f0f;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 8px 10px;
+            border-radius: 5px;
+        }
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
         }
@@ -207,13 +228,19 @@ class WebServer(commands.Cog):
                 <div style="padding: 10px 0;">
                     <button class="btn" onclick="window.location.href='/settings'">⚙️ Settings</button>
                     <button class="btn" onclick="clearLogs()">🗑️ Clear Logs</button>
-                    <button class="btn" onclick="toggleStream()">⏸️ Pause Stream</button>
+                    <button class="btn" onclick="toggleStream(this)">⏸️ Pause Stream</button>
                 </div>
             </div>
         </div>
         
         <div class="card">
             <h2>📜 Live Logs</h2>
+            <div class="filter-row">
+                <label for="moduleFilter" class="status-label">Module</label>
+                <select id="moduleFilter" onchange="applyFilter()">
+                    <option value="">All Modules</option>
+                </select>
+            </div>
             <div id="logs"></div>
             <div class="controls">
                 <button class="btn" onclick="scrollToBottom()">⬇️ Scroll to Bottom</button>
@@ -225,12 +252,16 @@ class WebServer(commands.Cog):
     <script>
         let streaming = true;
         let eventSource = null;
+        let allLogs = [];
+        let moduleSet = new Set();
         
         // Load initial logs
         fetch('/logs')
             .then(r => r.json())
             .then(data => {
-                displayLogs(data.logs);
+                allLogs = data.logs;
+                updateModuleOptions();
+                renderLogs();
                 scrollToBottom();
             });
         
@@ -247,6 +278,11 @@ class WebServer(commands.Cog):
             eventSource.onmessage = function(event) {
                 if (!streaming) return;
                 const log = JSON.parse(event.data);
+                allLogs.push(log);
+                if (!moduleSet.has(log.name)) {
+                    moduleSet.add(log.name);
+                    updateModuleOptions();
+                }
                 appendLog(log);
             };
         }
@@ -276,17 +312,42 @@ class WebServer(commands.Cog):
                 });
         }
         
-        function displayLogs(logs) {
-            const logsDiv = document.getElementById('logs');
-            logsDiv.innerHTML = logs.map(formatLog).join('');
-        }
-        
         function appendLog(log) {
+            const selected = document.getElementById('moduleFilter').value;
+            if (selected && log.name !== selected) return;
             const logsDiv = document.getElementById('logs');
             logsDiv.innerHTML += formatLog(log);
             if (logsDiv.scrollHeight - logsDiv.scrollTop < 700) {
                 scrollToBottom();
             }
+        }
+
+        function renderLogs() {
+            const logsDiv = document.getElementById('logs');
+            const selected = document.getElementById('moduleFilter').value;
+            const filtered = selected
+                ? allLogs.filter(l => l.name === selected)
+                : allLogs;
+            logsDiv.innerHTML = filtered.map(formatLog).join('');
+        }
+
+        function applyFilter() {
+            renderLogs();
+            scrollToBottom();
+        }
+
+        function updateModuleOptions() {
+            moduleSet = new Set(allLogs.map(l => l.name));
+            const select = document.getElementById('moduleFilter');
+            const current = select.value;
+            select.innerHTML = '<option value="">All Modules</option>';
+            Array.from(moduleSet).sort().forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                if (name === current) opt.selected = true;
+                select.appendChild(opt);
+            });
         }
         
         function formatLog(log) {
@@ -309,9 +370,9 @@ class WebServer(commands.Cog):
             logsDiv.scrollTop = logsDiv.scrollHeight;
         }
         
-        function toggleStream() {
+        function toggleStream(btn) {
             streaming = !streaming;
-            event.target.textContent = streaming ? '⏸️ Pause Stream' : '▶️ Resume Stream';
+            btn.textContent = streaming ? '⏸️ Pause Stream' : '▶️ Resume Stream';
         }
         
         function clearLogs() {
@@ -349,27 +410,51 @@ class WebServer(commands.Cog):
     async def stream_logs(self, request):
         """Server-Sent Events stream for real-time logs."""
         response = web.StreamResponse()
-        response.headers['Content-Type'] = 'text/event-stream'
+        response.headers['Content-Type'] = 'text/event-stream; charset=utf-8'
         response.headers['Cache-Control'] = 'no-cache'
         response.headers['Connection'] = 'keep-alive'
+        response.headers['X-Accel-Buffering'] = 'no'
         await response.prepare(request)
-        
-        last_index = len(self.log_handler.logs)
-        
+
+        # If the client reconnects, EventSource provides the last received id.
+        last_event_id = request.headers.get('Last-Event-ID')
+        try:
+            last_id = int(last_event_id) if last_event_id else 0
+        except ValueError:
+            last_id = 0
+
+        # Default behavior: only stream new logs after the connection is established.
+        if last_id == 0 and self.log_handler.logs:
+            last_id = self.log_handler.logs[-1].get('id', 0)
+
+        # Suggest client reconnect delay
+        await response.write(b"retry: 2000\n\n")
+
+        keepalive_every = 15.0
+        last_keepalive = asyncio.get_running_loop().time()
+
         try:
             while True:
-                # Check for new logs
                 current_logs = list(self.log_handler.logs)
-                if len(current_logs) > last_index:
-                    for log in current_logs[last_index:]:
-                        data = f"data: {json.dumps(log)}\n\n"
-                        await response.write(data.encode('utf-8'))
-                    last_index = len(current_logs)
-                
+                for log in current_logs:
+                    log_id = int(log.get('id', 0) or 0)
+                    if log_id <= last_id:
+                        continue
+                    payload = json.dumps(log)
+                    data = f"id: {log_id}\ndata: {payload}\n\n"
+                    await response.write(data.encode('utf-8'))
+                    last_id = log_id
+
+                now = asyncio.get_running_loop().time()
+                if now - last_keepalive >= keepalive_every:
+                    # SSE comment as keepalive ping
+                    await response.write(b": keepalive\n\n")
+                    last_keepalive = now
+
                 await asyncio.sleep(0.5)
-        except (ConnectionResetError, asyncio.CancelledError):
+        except (BrokenPipeError, ConnectionResetError, asyncio.CancelledError):
             pass
-        
+
         return response
     
     async def get_status(self, request):
@@ -429,3 +514,4 @@ async def setup(bot: commands.Bot):
     if not hasattr(bot, 'start_time'):
         bot.start_time = datetime.now()
     await bot.add_cog(WebServer(bot))
+

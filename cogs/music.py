@@ -7,7 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import asyncio
 import yt_dlp
-from typing import Optional, List, Set, Any
+from typing import Optional, List, Set, Any, Tuple
 from dataclasses import dataclass, field
 from collections import deque
 import random
@@ -28,6 +28,7 @@ from utils.views import NowPlayingView, AutoplayPreviewView
 from database import db
 from utils.discovery import discovery_engine
 from utils.logger import set_logger
+from utils.spotify import fetch_playlist_tracks, SpotifyError
 
 logger = set_logger(logging.getLogger('Vexo.Music'))
 
@@ -243,6 +244,14 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
 class Music(commands.Cog):
     """Music commands cog."""
+
+    playlist_group = app_commands.Group(name="playlist", description="Manage saved playlists")
+    PLAYLIST_SCOPE_CHOICES = [
+        app_commands.Choice(name="User (Only You)", value="user"),
+        app_commands.Choice(name="Server (This Guild)", value="guild"),
+        app_commands.Choice(name="Global (Everyone)", value="global"),
+    ]
+    SPOTIFY_MATCH_LIMIT = 50
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -366,6 +375,49 @@ class Music(commands.Cog):
     async def _pick_diverse_song(self, *args, **kwargs):
         # Legacy method replaced by discovery engine
         pass
+
+    def _is_youtube_playlist_url(self, value: str) -> bool:
+        return "list=" in value and ("youtube.com" in value or "youtu.be" in value)
+
+    def _is_spotify_playlist_url(self, value: str) -> bool:
+        return "spotify.com/playlist" in value or value.startswith("spotify:playlist:")
+
+    async def _get_youtube_playlist_title(self, playlist_url: str) -> Optional[str]:
+        loop = self.bot.loop or asyncio.get_event_loop()
+        opts = Config.YTDL_FORMAT_OPTIONS.copy()
+        opts["extract_flat"] = True
+        opts["playlistend"] = 1
+        try:
+            ytdl_instance = yt_dlp.YoutubeDL(opts)
+            data = await loop.run_in_executor(
+                None,
+                lambda: ytdl_instance.extract_info(playlist_url, download=False)
+            )
+            if data:
+                return data.get("title")
+        except Exception as e:
+            logger.error(f"Failed to fetch YouTube playlist title: {e}")
+        return None
+
+    async def _match_spotify_tracks(self, tracks: List[Tuple[str, str]]) -> List[Song]:
+        loop = self.bot.loop or asyncio.get_event_loop()
+        limited = tracks[: self.SPOTIFY_MATCH_LIMIT]
+        semaphore = asyncio.Semaphore(5)
+        results: List[Optional[Song]] = [None] * len(limited)
+
+        async def _match(index: int, title: str, artist: str):
+            query = f"{artist} - {title}" if artist else title
+            try:
+                async with semaphore:
+                    results[index] = await YTDLSource.search(query, loop=loop)
+            except Exception as e:
+                logger.error(f"Spotify track match failed for '{query}': {e}")
+
+        await asyncio.gather(*[
+            _match(i, title, artist) for i, (title, artist) in enumerate(limited)
+        ])
+
+        return [song for song in results if song]
     
     async def ensure_voice(self, interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
         """Ensure the user is in a voice channel and bot can join."""
@@ -615,6 +667,394 @@ class Music(commands.Cog):
             # Re-call self to try and prefetch now that buffer might have items
             if state.autoplay_visible:
                 await self._prefetch_next(guild_id)
+
+    @playlist_group.command(name="add", description="Add a Spotify or YouTube playlist")
+    @app_commands.describe(
+        url="Spotify or YouTube playlist link",
+        scope="Who can access this playlist",
+        name="Optional display name",
+        genre="Optional genre for grouping"
+    )
+    @app_commands.choices(scope=PLAYLIST_SCOPE_CHOICES)
+    @app_commands.autocomplete(genre=_genre_autocomplete)
+    async def playlist_add(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        scope: app_commands.Choice[str],
+        name: Optional[str] = None,
+        genre: Optional[str] = None
+    ):
+        """Add a playlist for later selection."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                embed=create_error_embed("This command can only be used in a server!"),
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        source = None
+        playlist_title = None
+        track_count = 0
+
+        if self._is_spotify_playlist_url(url):
+            source = "spotify"
+            try:
+                playlist_title, tracks, total = fetch_playlist_tracks(url, limit=1)
+            except SpotifyError as e:
+                await interaction.followup.send(embed=create_error_embed(str(e)))
+                return
+            track_count = total or len(tracks)
+            if track_count == 0:
+                await interaction.followup.send(
+                    embed=create_error_embed("No tracks found in that Spotify playlist.")
+                )
+                return
+        elif self._is_youtube_playlist_url(url):
+            source = "youtube"
+            songs = await YTDLSource.from_playlist(url, loop=self.bot.loop, shuffle=False, count=1)
+            if not songs:
+                await interaction.followup.send(
+                    embed=create_error_embed("No songs found in that YouTube playlist.")
+                )
+                return
+            playlist_title = await self._get_youtube_playlist_title(url)
+            track_count = 0
+        else:
+            await interaction.followup.send(
+                embed=create_error_embed("Please provide a valid Spotify or YouTube playlist link.")
+            )
+            return
+
+        scope_value = scope.value
+        guild_id = interaction.guild.id if scope_value == "guild" else None
+        owner_id = interaction.user.id
+        display_name = name or playlist_title
+        genre_value = genre.strip().lower() if genre else None
+
+        playlist_id = await db.add_playlist(
+            scope=scope_value,
+            url=url,
+            source=source,
+            user_id=owner_id,
+            guild_id=guild_id,
+            name=display_name,
+            genre=genre_value
+        )
+
+        scope_label = {
+            "user": "User",
+            "guild": "Server",
+            "global": "Global"
+        }.get(scope_value, scope_value)
+
+        title_part = f"**{display_name}**" if display_name else "playlist"
+        extra = f" ({track_count} track{'s' if track_count != 1 else ''})" if track_count else ""
+        genre_text = f" — Genre: **{genre_value}**" if genre_value else ""
+        await interaction.followup.send(
+            embed=create_success_embed(
+                f"Saved {title_part}{extra} as **{scope_label}** playlist (ID `{playlist_id}`).{genre_text}"
+            )
+        )
+
+    async def _playlist_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str
+    ) -> List[app_commands.Choice[str]]:
+        if not interaction.guild:
+            return []
+        playlists = await db.get_playlists_for_user(interaction.user.id, interaction.guild.id, limit=50)
+        results: List[app_commands.Choice[str]] = []
+        current_lower = current.lower()
+        genre_filter = None
+        if hasattr(interaction, "namespace") and getattr(interaction.namespace, "genre", None):
+            genre_filter = str(interaction.namespace.genre).strip().lower()
+        scope_label = {
+            "user": "You",
+            "guild": "Server",
+            "global": "Global"
+        }
+
+        for plist in playlists:
+            if genre_filter and (plist.get("genre") or "").lower() != genre_filter:
+                continue
+            label = plist.get("name") or plist.get("url") or "Playlist"
+            suffix = scope_label.get(plist.get("scope"), "Unknown")
+            display = f"{label} ({suffix})"
+            if current_lower and current_lower not in display.lower():
+                continue
+            results.append(
+                app_commands.Choice(
+                    name=display[:100],
+                    value=str(plist["id"])
+                )
+            )
+            if len(results) >= 25:
+                break
+
+        return results
+
+    async def _guild_playlist_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str
+    ) -> List[app_commands.Choice[str]]:
+        if not interaction.guild:
+            return []
+        playlists = await db.get_playlists_for_user(interaction.user.id, interaction.guild.id, limit=50)
+        results: List[app_commands.Choice[str]] = []
+        current_lower = current.lower()
+        for plist in playlists:
+            if plist.get("scope") != "guild":
+                continue
+            label = plist.get("name") or plist.get("url") or "Playlist"
+            display = f"{label} (Server)"
+            if current_lower and current_lower not in display.lower():
+                continue
+            results.append(
+                app_commands.Choice(
+                    name=display[:100],
+                    value=str(plist["id"])
+                )
+            )
+            if len(results) >= 25:
+                break
+        return results
+
+    async def _genre_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str
+    ) -> List[app_commands.Choice[str]]:
+        if not interaction.guild:
+            return []
+        genres = await db.get_genre_suggestions(interaction.user.id, interaction.guild.id, limit=50)
+        results: List[app_commands.Choice[str]] = []
+        current_lower = current.lower()
+        for genre in genres:
+            if current_lower and current_lower not in genre.lower():
+                continue
+            results.append(app_commands.Choice(name=genre[:100], value=genre))
+            if len(results) >= 25:
+                break
+        return results
+
+    @playlist_group.command(name="play", description="Play a saved playlist")
+    @app_commands.describe(
+        playlist="Select a playlist to play",
+        genre="Optional genre filter"
+    )
+    @app_commands.autocomplete(playlist=_playlist_autocomplete, genre=_genre_autocomplete)
+    async def playlist_play(self, interaction: discord.Interaction, playlist: str, genre: Optional[str] = None):
+        """Play a previously saved playlist."""
+        vc = await self.ensure_voice(interaction)
+        if not vc:
+            return
+
+        await interaction.response.defer()
+
+        try:
+            playlist_id = int(playlist)
+        except ValueError:
+            await interaction.followup.send(
+                embed=create_error_embed("Invalid playlist selection.")
+            )
+            return
+
+        plist = await db.get_playlist_by_id(playlist_id)
+        if not plist:
+            await interaction.followup.send(
+                embed=create_error_embed("That playlist was not found.")
+            )
+            return
+
+        scope = plist.get("scope")
+        if scope == "user" and plist.get("user_id") != interaction.user.id:
+            await interaction.followup.send(
+                embed=create_error_embed("You don't have access to that playlist.")
+            )
+            return
+        if scope == "guild" and plist.get("guild_id") != interaction.guild.id:
+            await interaction.followup.send(
+                embed=create_error_embed("That playlist belongs to another server.")
+            )
+            return
+        if genre:
+            genre_filter = genre.strip().lower()
+            if (plist.get("genre") or "").lower() != genre_filter:
+                await interaction.followup.send(
+                    embed=create_error_embed("That playlist doesn't match the selected genre.")
+                )
+                return
+
+        state = self.get_state(interaction.guild.id)
+        state.voice_client = vc
+        state.text_channel = interaction.channel
+
+        source = plist.get("source")
+        url = plist.get("url")
+        display_name = plist.get("name") or "playlist"
+
+        songs: List[Song] = []
+        matched_count = 0
+        total_tracks = 0
+
+        if source == "youtube":
+            songs = await YTDLSource.from_playlist(url, loop=self.bot.loop, shuffle=False, count=50)
+            total_tracks = len(songs)
+            matched_count = len(songs)
+        elif source == "spotify":
+            try:
+                playlist_title, tracks, total = fetch_playlist_tracks(url, limit=self.SPOTIFY_MATCH_LIMIT)
+            except SpotifyError as e:
+                await interaction.followup.send(embed=create_error_embed(str(e)))
+                return
+            total_tracks = len(tracks)
+            if total_tracks == 0:
+                await interaction.followup.send(
+                    embed=create_error_embed("No tracks found in that Spotify playlist.")
+                )
+                return
+            display_name = plist.get("name") or playlist_title or display_name
+            songs = await self._match_spotify_tracks(tracks)
+            matched_count = len(songs)
+        else:
+            await interaction.followup.send(
+                embed=create_error_embed("Unknown playlist source.")
+            )
+            return
+
+        if not songs:
+            await interaction.followup.send(
+                embed=create_error_embed("No playable songs were found for that playlist.")
+            )
+            return
+
+        # Record interaction for first song
+        await discovery_engine.record_interaction(
+            interaction.user.id,
+            songs[0].author,
+            songs[0].title,
+            songs[0].webpage_url,
+            "request"
+        )
+
+        if vc.is_playing() or vc.is_paused():
+            state.queue.extend(songs)
+            await interaction.followup.send(
+                embed=create_success_embed(
+                    f"📋 **Added {len(songs)} songs from {display_name}!**"
+                )
+            )
+        else:
+            first_song = songs[0]
+            state.queue.extend(songs[1:])
+            self._play_song(interaction.guild.id, first_song)
+            await interaction.followup.send(
+                embed=create_success_embed(
+                    f"📋 **Playing {display_name}!** Added {len(songs)} songs ({len(songs)-1} queued)"
+                )
+            )
+
+        if source == "spotify" and total_tracks:
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    "Spotify Match Results",
+                    f"Matched **{matched_count}/{total_tracks}** tracks to YouTube results."
+                )
+            )
+
+        if not state.total_autoplay:
+            asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
+
+    @playlist_group.command(name="remove", description="Remove a playlist from your personal options")
+    @app_commands.describe(playlist="Select a playlist to remove")
+    @app_commands.autocomplete(playlist=_playlist_autocomplete)
+    async def playlist_remove(self, interaction: discord.Interaction, playlist: str):
+        """Remove a playlist from the user's personal list (or hide if guild/global)."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                embed=create_error_embed("This command can only be used in a server!"),
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            playlist_id = int(playlist)
+        except ValueError:
+            await interaction.followup.send(
+                embed=create_error_embed("Invalid playlist selection.")
+            )
+            return
+
+        plist = await db.get_playlist_by_id(playlist_id)
+        if not plist:
+            await interaction.followup.send(
+                embed=create_error_embed("That playlist was not found.")
+            )
+            return
+
+        scope = plist.get("scope")
+        if scope == "user":
+            deleted = await db.delete_user_playlist(playlist_id, interaction.user.id)
+            if not deleted:
+                await interaction.followup.send(
+                    embed=create_error_embed("You can't remove that user playlist.")
+                )
+                return
+            await interaction.followup.send(
+                embed=create_success_embed("Removed that playlist from your personal list.")
+            )
+            return
+
+        hidden = await db.hide_playlist_for_user(playlist_id, interaction.user.id)
+        if hidden:
+            await interaction.followup.send(
+                embed=create_success_embed("Removed that playlist from your personal list.")
+            )
+        else:
+            await interaction.followup.send(
+                embed=create_info_embed("No Change", "That playlist was already removed from your personal list.")
+            )
+
+    @playlist_group.command(name="remove_guild", description="Remove a server playlist (Admin only)")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(playlist="Select a server playlist to remove")
+    @app_commands.autocomplete(playlist=_guild_playlist_autocomplete)
+    async def playlist_remove_guild(self, interaction: discord.Interaction, playlist: str):
+        """Remove a guild-scoped playlist."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                embed=create_error_embed("This command can only be used in a server!"),
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            playlist_id = int(playlist)
+        except ValueError:
+            await interaction.followup.send(
+                embed=create_error_embed("Invalid playlist selection.")
+            )
+            return
+
+        deleted = await db.delete_guild_playlist(playlist_id, interaction.guild.id)
+        if not deleted:
+            await interaction.followup.send(
+                embed=create_error_embed("That server playlist could not be removed.")
+            )
+            return
+
+        await interaction.followup.send(
+            embed=create_success_embed("Removed that server playlist.")
+        )
     
     @app_commands.command(name="play", description="Play a song or playlist from YouTube")
     @app_commands.describe(query="Song name, YouTube URL, or playlist URL")

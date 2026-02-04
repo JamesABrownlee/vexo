@@ -56,7 +56,7 @@ class MusicBot(commands.Bot):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logger.info(f"Connected to {len(self.guilds)} guild(s)")
         logger.info("━" * 50)
-        logger.info("🎵 Vexo 2.05u is ready!")
+        logger.info("🎵 Vexo 2.07.1 is ready!")
         logger.info("━" * 50)
 
 
