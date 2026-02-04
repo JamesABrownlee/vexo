@@ -11,7 +11,7 @@ from config import Config
 from utils.logger import set_logger
 
 # Setup logging
-logger = set_logger(logging.getLogger('MusicBot'))
+logger = set_logger(logging.getLogger('Vexo.MusicBot'))
 
 
 class MusicBot(commands.Bot):
@@ -42,6 +42,9 @@ class MusicBot(commands.Bot):
 
         await self.load_extension("cogs.settings")
         logger.info("Loaded settings cog")
+
+        await self.load_extension("cogs.webrowser")
+        logger.info("Loaded web server cog")
 
         
         # Sync slash commands
