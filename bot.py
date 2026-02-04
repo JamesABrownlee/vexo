@@ -8,14 +8,10 @@ import discord
 from discord.ext import commands
 
 from config import Config
+from utils.logger import set_logger
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger('MusicBot')
+logger = set_logger(logging.getLogger('MusicBot'))
 
 
 class MusicBot(commands.Bot):

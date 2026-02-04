@@ -4,6 +4,8 @@ services:
     image: ghcr.io/jamesabrownlee/vexo:latest
     container_name: vexo
     restart: unless-stopped
+    ports:
+      - "8080:8080"
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - DEFAULT_VOLUME=50

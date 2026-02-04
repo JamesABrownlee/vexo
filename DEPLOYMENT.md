@@ -37,6 +37,7 @@ services:
       - DEFAULT_VOLUME=50
       - YTDL_COOKIES_PATH=/app/data/cookies.txt
       - YTDL_PO_TOKEN=your_po_token_here
+      - FALLBACK_PLAYLIST=https://youtube.com/playlist?list=YOUR_PLAYLIST_ID
       - DATABASE_PATH=/app/data/vexo.db
     volumes:
       - ./data:/app/data

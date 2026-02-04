@@ -10,6 +10,8 @@ import logging
 
 logger = logging.getLogger('MusicBot.Settings')
 
+LOGGING_LEVEL = logging.INFO
+
 # Default settings for a guild
 DEFAULT_SETTINGS = {
     # Admin settings
