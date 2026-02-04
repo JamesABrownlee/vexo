@@ -1,5 +1,7 @@
 import logging
-from .settings import LOGGING_LEVEL
+
+# Default logging level
+LOGGING_LEVEL = logging.INFO
 
 
 class LoggingFormatter(logging.Formatter):

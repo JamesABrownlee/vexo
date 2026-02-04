@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import logging
 
-from utils.logger import set_logger
-
-logger = set_logger(logging.getLogger('MusicBot.Settings'))
+logger = logging.getLogger('MusicBot.Settings')
 
 LOGGING_LEVEL = logging.INFO
 
