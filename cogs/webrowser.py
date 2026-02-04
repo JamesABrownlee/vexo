@@ -54,16 +54,8 @@ class WebServer(commands.Cog):
         
         # Set up log handler
         self.log_handler = LogHandler(max_logs=1000)
-        self.log_handler.setLevel(logging.DEBUG)
+        self.log_handler.setLevel(logging.INFO)
         self.log_handler.setFormatter(logging.Formatter("%(message)s"))
-        
-        # Attach to root logger and existing loggers to catch all logs
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)
-        root_logger.addHandler(self.log_handler)
-        for log_obj in logging.Logger.manager.loggerDict.values():
-            if isinstance(log_obj, logging.Logger) and self.log_handler not in log_obj.handlers:
-                log_obj.addHandler(self.log_handler)
         
         # Set up routes
         self.app.router.add_get('/', self.index)
