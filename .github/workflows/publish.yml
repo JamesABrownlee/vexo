@@ -21,7 +21,7 @@ jobs:
 
       - name: Set image name
         run: |
-          echo "IMAGE_NAME=axiom3d-yt/vexo-bot" >> $GITHUB_ENV
+          echo "IMAGE_NAME=jamesabrownlee/vexo" >> $GITHUB_ENV
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
