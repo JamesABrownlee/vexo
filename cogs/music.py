@@ -27,8 +27,9 @@ from utils.embeds import (
 from utils.views import NowPlayingView, AutoplayPreviewView
 from database import db
 from utils.discovery import discovery_engine
+from utils.logger import set_logger
 
-logger = logging.getLogger('Vexo.Music')
+logger = set_logger(logging.getLogger('Vexo.Music'))
 
 
 @dataclass

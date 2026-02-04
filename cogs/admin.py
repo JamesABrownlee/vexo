@@ -4,7 +4,9 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 
-logger = logging.getLogger('MusicBot')
+from utils.logger import set_logger
+
+logger = set_logger(logging.getLogger('MusicBot.Admin'))
 
 class Admin(commands.Cog):
     """Administrative commands for the bot."""

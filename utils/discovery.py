@@ -3,8 +3,9 @@ import random
 from typing import List, Dict, Optional, Any
 from database import db
 from config import Config
+from utils.logger import set_logger
 
-logger = logging.getLogger('Vexo.Discovery')
+logger = set_logger(logging.getLogger('Vexo.Discovery'))
 
 class DiscoveryEngine:
     """The smart discovery logic for Vexo."""

@@ -3,8 +3,9 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 from config import Config
+from utils.logger import set_logger
 
-logger = logging.getLogger('Vexo.Settings')
+logger = set_logger(logging.getLogger('Vexo.Settings'))
 
 class Settings(commands.Cog):
     """Simplified permission management for Vexo."""

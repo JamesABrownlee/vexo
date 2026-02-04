@@ -4,8 +4,9 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+from utils.logger import set_logger
 
-logger = logging.getLogger('Vexo.Database')
+logger = set_logger(logging.getLogger('Vexo.Database'))
 
 class Database:
     """Async database wrapper for Vexo."""
