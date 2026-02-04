@@ -615,10 +615,10 @@ class Music(commands.Cog):
             if state.autoplay_visible:
                 await self._prefetch_next(guild_id)
     
-    @app_commands.command(name="play", description="Play a song from YouTube")
-    @app_commands.describe(query="Song name or YouTube URL")
+    @app_commands.command(name="play", description="Play a song or playlist from YouTube")
+    @app_commands.describe(query="Song name, YouTube URL, or playlist URL")
     async def play(self, interaction: discord.Interaction, query: str):
-        """Play a song from YouTube."""
+        """Play a song or playlist from YouTube."""
         vc = await self.ensure_voice(interaction)
         if not vc:
             return
@@ -629,42 +629,84 @@ class Music(commands.Cog):
         state.voice_client = vc
         state.text_channel = interaction.channel
         
-        song = await YTDLSource.search(query, loop=self.bot.loop)
+        # Check if this is a playlist URL
+        is_playlist = "list=" in query and ("youtube.com" in query or "youtu.be" in query)
         
-        if not song:
-            await interaction.followup.send(
-                embed=create_error_embed(f"No results found for: `{query}`")
-            )
-            return
-        
-        # Record "request" interaction
-        await discovery_engine.record_interaction(
-            interaction.user.id, 
-            song.author, 
-            song.title, 
-            song.webpage_url, 
-            "request"
-        )
-        
-        if vc.is_playing() or vc.is_paused():
-            # Add to the bottom of the requested songs (which is just the queue)
-            # This naturally puts it above autoplay songs in the play_next logic
-            state.queue.append(song)
-            await interaction.followup.send(
-                embed=create_added_to_queue_embed(song, len(state.queue))
+        if is_playlist:
+            # Extract songs from playlist
+            songs = await YTDLSource.from_playlist(query, loop=self.bot.loop, shuffle=False, count=50)
+            
+            if not songs:
+                await interaction.followup.send(
+                    embed=create_error_embed(f"No songs found in playlist: `{query}`")
+                )
+                return
+            
+            # Record interaction for first song
+            await discovery_engine.record_interaction(
+                interaction.user.id,
+                songs[0].author,
+                songs[0].title,
+                songs[0].webpage_url,
+                "request"
             )
             
-            # Mood refresh: If playing, update hidden autoplay for this request
-            asyncio.create_task(discovery_engine.get_mood_recommendation(interaction.guild.id, song.title, song.author))
+            if vc.is_playing() or vc.is_paused():
+                # Add all songs to queue
+                state.queue.extend(songs)
+                await interaction.followup.send(
+                    embed=create_success_embed(f"📋 **Added {len(songs)} songs from playlist to queue!**")
+                )
+            else:
+                # Play first song, queue the rest
+                first_song = songs[0]
+                state.queue.extend(songs[1:])
+                self._play_song(interaction.guild.id, first_song)
+                await interaction.followup.send(
+                    embed=create_success_embed(f"📋 **Playing playlist!** Added {len(songs)} songs ({len(songs)-1} queued)")
+                )
+                
+                # Trigger initial discovery refill if empty
+                if not state.total_autoplay:
+                    asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
         else:
-            self._play_song(interaction.guild.id, song)
-            await interaction.followup.send(
-                embed=create_now_playing_embed(song, state)
+            # Single song search (original behavior)
+            song = await YTDLSource.search(query, loop=self.bot.loop)
+            
+            if not song:
+                await interaction.followup.send(
+                    embed=create_error_embed(f"No results found for: `{query}`")
+                )
+                return
+            
+            # Record "request" interaction
+            await discovery_engine.record_interaction(
+                interaction.user.id, 
+                song.author, 
+                song.title, 
+                song.webpage_url, 
+                "request"
             )
             
-            # Trigger initial discovery refill if empty
-            if not state.total_autoplay:
-                asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
+            if vc.is_playing() or vc.is_paused():
+                # Add to the bottom of the requested songs (which is just the queue)
+                # This naturally puts it above autoplay songs in the play_next logic
+                state.queue.append(song)
+                await interaction.followup.send(
+                    embed=create_added_to_queue_embed(song, len(state.queue))
+                )
+                
+                # Mood refresh: If playing, update hidden autoplay for this request
+                asyncio.create_task(discovery_engine.get_mood_recommendation(interaction.guild.id, song.title, song.author))
+            else:
+                self._play_song(interaction.guild.id, song)
+                await interaction.followup.send(
+                    embed=create_now_playing_embed(song, state)
+                )
+                
+                # Trigger initial discovery refill if empty
+                if not state.total_autoplay:
+                    asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
 
     @app_commands.command(name="just_play", description="Start smart autoplay without a specific request")
     async def just_play(self, interaction: discord.Interaction):
