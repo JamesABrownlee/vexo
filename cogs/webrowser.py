@@ -1,5 +1,5 @@
 """
-Web Interface Cog for Vexo
+Web Interface Cog for Vexo - Spotify Premium Aesthetic
 Provides a web dashboard for viewing logs and managing settings.
 """
 import asyncio
@@ -46,7 +46,7 @@ class LogHandler(logging.Handler):
 
 
 class WebServer(commands.Cog):
-    """Web interface for logs and admin settings."""
+    """Web interface for logs and admin settings with Spotify Premium aesthetic."""
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -138,7 +138,7 @@ class WebServer(commands.Cog):
         return f"User {user_id}"
 
     async def dashboard(self, request):
-        """Serve the main stats dashboard page."""
+        """Serve the main stats dashboard page with Spotify Premium styling."""
         html = """
 <!DOCTYPE html>
 <html>
@@ -149,20 +149,20 @@ class WebServer(commands.Cog):
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0D0D0D;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #121212;
             color: #fff;
             padding: 20px;
         }
         .container { max-width: 1400px; margin: 0 auto; }
         h1 {
-            color: #00D4FF;
+            color: #fff;
             margin-bottom: 10px;
             font-size: 2.5em;
-            text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+            font-weight: 900;
         }
         .subtitle {
-            color: #888;
+            color: #b3b3b3;
             margin-bottom: 26px;
             font-size: 1.1em;
         }
@@ -179,49 +179,50 @@ class WebServer(commands.Cog):
             margin-bottom: 20px;
         }
         .card {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 8px;
+            background: #181818;
+            border: 1px solid #282828;
+            border-radius: 12px;
             padding: 20px;
         }
         .card h2 {
-            color: #00D4FF;
+            color: #1db954;
             margin-bottom: 15px;
             font-size: 1.3em;
+            font-weight: 700;
         }
         .status-item {
             display: flex;
             justify-content: space-between;
             padding: 10px 0;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid #282828;
             gap: 14px;
         }
         .status-item:last-child { border-bottom: none; }
-        .status-label { color: #888; }
+        .status-label { color: #b3b3b3; }
         .status-value {
-            color: #00D4FF;
+            color: #1db954;
             font-weight: bold;
             text-align: right;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .btn {
-            background: #00D4FF;
+            background: #1db954;
             color: #000;
             border: none;
             padding: 10px 16px;
-            border-radius: 5px;
+            border-radius: 500px;
             cursor: pointer;
             font-weight: bold;
             margin-right: 10px;
         }
-        .btn:hover { background: #00b8e6; }
+        .btn:hover { background: #1ed760; }
         .btn.secondary {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            color: #00D4FF;
+            background: transparent;
+            border: 1px solid #282828;
+            color: #fff;
         }
-        .btn.secondary:hover { background: #111; }
+        .btn.secondary:hover { background: #282828; }
         .filter-row {
             margin-top: 10px;
             display: flex;
@@ -230,17 +231,17 @@ class WebServer(commands.Cog):
             flex-wrap: wrap;
         }
         select {
-            background: #0f0f0f;
-            border: 1px solid #333;
+            background: #282828;
+            border: 1px solid #404040;
             color: #fff;
             padding: 8px 10px;
-            border-radius: 5px;
+            border-radius: 8px;
         }
         h3 {
             margin-top: 14px;
             margin-bottom: 8px;
             font-size: 1.05em;
-            color: #00FF88;
+            color: #fff;
         }
         table {
             width: 100%;
@@ -249,14 +250,14 @@ class WebServer(commands.Cog):
         }
         th, td {
             padding: 10px 8px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid #282828;
             vertical-align: top;
         }
-        th { color: #00D4FF; text-align: left; font-weight: 600; }
-        td { color: #ddd; }
-        .muted { color: #888; }
-        .error { color: #FF3366; }
-        code { color: #00FF88; }
+        th { color: #1db954; text-align: left; font-weight: 600; }
+        td { color: #b3b3b3; }
+        .muted { color: #b3b3b3; }
+        .error { color: #ff3366; }
+        code { color: #1db954; }
         @media (max-width: 900px) {
             .grid { grid-template-columns: 1fr; }
             .grid-3 { grid-template-columns: 1fr; }
@@ -282,7 +283,7 @@ class WebServer(commands.Cog):
                     <button class="btn secondary" onclick="window.location.href='/logs/watchtower'">🧭 Watchtower</button>
                     <button class="btn secondary" onclick="window.location.href='/settings'">⚙️ Settings</button>
                 </div>
-                <div id="spotifyTestResult" style="padding: 6px 0; color: #888;"></div>
+                <div id="spotifyTestResult" style="padding: 6px 0; color: #b3b3b3;"></div>
             </div>
         </div>
 
@@ -626,7 +627,7 @@ class WebServer(commands.Cog):
             const out = document.getElementById('spotifyTestResult');
             if (out) {
                 out.textContent = 'Testing Spotify...';
-                out.style.color = '#888';
+                out.style.color = '#b3b3b3';
             }
 
             const originalText = btn ? btn.textContent : '';
@@ -650,17 +651,17 @@ class WebServer(commands.Cog):
                         }
                         if (data.checked_at) msg += ` @ ${data.checked_at}`;
                         out.textContent = msg;
-                        out.style.color = '#00FF88';
+                        out.style.color = '#1db954';
                     } else {
                         const err = data.error || 'Unknown error';
                         out.textContent = `Spotify FAIL: ${err}${data.checked_at ? ' @ ' + data.checked_at : ''}`;
-                        out.style.color = '#FF3366';
+                        out.style.color = '#ff3366';
                     }
                 })
                 .catch(err => {
                     if (!out) return;
                     out.textContent = `Spotify test error: ${err}`;
-                    out.style.color = '#FF3366';
+                    out.style.color = '#ff3366';
                 })
                 .finally(() => {
                     if (btn) {
@@ -696,7 +697,7 @@ class WebServer(commands.Cog):
         return web.Response(text=html, content_type='text/html')
 
     async def watchtower_logs_view(self, request):
-        """Serve the watchtower logs page."""
+        """Serve the watchtower logs page with Spotify Premium styling."""
         html = """
 <!DOCTYPE html>
 <html>
@@ -707,52 +708,53 @@ class WebServer(commands.Cog):
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0D0D0D;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #121212;
             color: #fff;
             padding: 20px;
         }
         .container { max-width: 1200px; margin: 0 auto; }
         h1 {
-            color: #00D4FF;
+            color: #fff;
             margin-bottom: 10px;
             font-size: 2.2em;
-            text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+            font-weight: 900;
         }
-        .subtitle { color: #888; margin-bottom: 18px; }
+        .subtitle { color: #b3b3b3; margin-bottom: 18px; }
         .btn {
-            background: #00D4FF;
+            background: #1db954;
             color: #000;
             border: none;
             padding: 10px 16px;
-            border-radius: 5px;
+            border-radius: 500px;
             cursor: pointer;
             font-weight: bold;
             margin-right: 10px;
         }
-        .btn:hover { background: #00b8e6; }
+        .btn:hover { background: #1ed760; }
         .btn.secondary {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            color: #00D4FF;
+            background: transparent;
+            border: 1px solid #282828;
+            color: #fff;
         }
-        .btn.secondary:hover { background: #111; }
+        .btn.secondary:hover { background: #282828; }
         pre {
-            background: #000;
-            border: 1px solid #333;
+            background: #0f0f0f;
+            border: 1px solid #282828;
             border-radius: 8px;
             padding: 15px;
             height: 700px;
             overflow-y: auto;
-            font-family: 'Consolas', 'Monaco', monospace;
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
             font-size: 0.9em;
             white-space: pre-wrap;
             word-break: break-word;
             margin-top: 14px;
+            color: #b3b3b3;
         }
-        .muted { color: #888; }
-        .error { color: #FF3366; }
-        code { color: #00FF88; }
+        .muted { color: #b3b3b3; }
+        .error { color: #ff3366; }
+        code { color: #1db954; }
     </style>
 </head>
 <body>
@@ -818,31 +820,31 @@ class WebServer(commands.Cog):
         return web.Response(text=html, content_type='text/html')
 
     async def index(self, request):
-        """Serve the Vexo live logs page."""
+        """Serve the Vexo live logs page with Spotify Premium styling."""
         html = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Vexo Dashboard</title>
+    <title>Vexo Logs</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0D0D0D;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #121212;
             color: #fff;
             padding: 20px;
         }
         .container { max-width: 1400px; margin: 0 auto; }
         h1 {
-            color: #00D4FF;
+            color: #fff;
             margin-bottom: 10px;
             font-size: 2.5em;
-            text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+            font-weight: 900;
         }
         .subtitle {
-            color: #888;
+            color: #b3b3b3;
             margin-bottom: 30px;
             font-size: 1.1em;
         }
@@ -853,67 +855,69 @@ class WebServer(commands.Cog):
             margin-bottom: 20px;
         }
         .card {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 8px;
+            background: #181818;
+            border: 1px solid #282828;
+            border-radius: 12px;
             padding: 20px;
         }
         .card h2 {
-            color: #00D4FF;
+            color: #1db954;
             margin-bottom: 15px;
             font-size: 1.3em;
+            font-weight: 700;
         }
         .status-item {
             display: flex;
             justify-content: space-between;
             padding: 10px 0;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid #282828;
         }
         .status-item:last-child { border-bottom: none; }
-        .status-label { color: #888; }
+        .status-label { color: #b3b3b3; }
         .status-value {
-            color: #00D4FF;
+            color: #1db954;
             font-weight: bold;
         }
         #logs {
-            background: #000;
-            border: 1px solid #333;
+            background: #0f0f0f;
+            border: 1px solid #282828;
             border-radius: 8px;
             padding: 15px;
             height: 600px;
             overflow-y: auto;
-            font-family: 'Consolas', 'Monaco', monospace;
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
             font-size: 0.9em;
         }
         .log-entry {
             padding: 4px 0;
             border-bottom: 1px solid #1a1a1a;
+            color: #b3b3b3;
         }
-        .log-time { color: #666; }
+        .log-time { color: #535353; }
         .log-level {
             padding: 2px 6px;
             border-radius: 3px;
             font-weight: bold;
             margin: 0 8px;
         }
-        .log-level.DEBUG { background: #555; color: #aaa; }
-        .log-level.INFO { background: #0066cc; color: #fff; }
-        .log-level.WARNING { background: #ff9900; color: #000; }
-        .log-level.ERROR { background: #cc0000; color: #fff; }
+        .log-level.DEBUG { background: #404040; color: #b3b3b3; }
+        .log-level.INFO { background: #1db954; color: #000; }
+        .log-level.WARNING { background: #ffa500; color: #000; }
+        .log-level.ERROR { background: #ff3366; color: #fff; }
         .log-level.CRITICAL { background: #ff0000; color: #fff; }
-        .log-name { color: #00ff88; }
-        .log-message { color: #00d4ff; }
+        .log-name { color: #1db954; }
+        .log-message { color: #b3b3b3; }
         .btn {
-            background: #00D4FF;
+            background: #1db954;
             color: #000;
             border: none;
             padding: 10px 20px;
-            border-radius: 5px;
+            border-radius: 500px;
             cursor: pointer;
             font-weight: bold;
             margin-right: 10px;
         }
-        .btn:hover { background: #00b8e6; }
+        .btn:hover { background: #1ed760; }
         .controls {
             margin-top: 15px;
             display: flex;
@@ -926,11 +930,11 @@ class WebServer(commands.Cog):
             align-items: center;
         }
         select {
-            background: #0f0f0f;
-            border: 1px solid #333;
+            background: #282828;
+            border: 1px solid #404040;
             color: #fff;
             padding: 8px 10px;
-            border-radius: 5px;
+            border-radius: 8px;
         }
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
@@ -996,7 +1000,7 @@ class WebServer(commands.Cog):
             const result = document.createElement('div');
             result.id = 'spotifyTestResult';
             result.style.padding = '6px 0';
-            result.style.color = '#888';
+            result.style.color = '#b3b3b3';
             quickActions.parentElement.appendChild(result);
         }
         
@@ -1148,7 +1152,7 @@ class WebServer(commands.Cog):
             const out = document.getElementById('spotifyTestResult');
             if (out) {
                 out.textContent = 'Testing Spotify...';
-                out.style.color = '#888';
+                out.style.color = '#b3b3b3';
             }
 
             const originalText = btn ? btn.textContent : '';
@@ -1172,17 +1176,17 @@ class WebServer(commands.Cog):
                         }
                         if (data.checked_at) msg += ` @ ${data.checked_at}`;
                         out.textContent = msg;
-                        out.style.color = '#00FF88';
+                        out.style.color = '#1db954';
                     } else {
                         const err = data.error || 'Unknown error';
                         out.textContent = `Spotify FAIL: ${err}${data.checked_at ? ' @ ' + data.checked_at : ''}`;
-                        out.style.color = '#FF3366';
+                        out.style.color = '#ff3366';
                     }
                 })
                 .catch(err => {
                     if (!out) return;
                     out.textContent = `Spotify test error: ${err}`;
-                    out.style.color = '#FF3366';
+                    out.style.color = '#ff3366';
                 })
                 .finally(() => {
                     if (btn) {
@@ -1629,26 +1633,6 @@ class WebServer(commands.Cog):
                 ''', (user_id, limit)) as cur:
                     top_requested = [dict(r) for r in await cur.fetchall()]
 
-                # Get user's saved playlists
-                async with conn.execute('''
-                    SELECT id, name, source, url, genre, created_at
-                    FROM playlists
-                    WHERE scope = 'user' AND user_id = ?
-                    ORDER BY datetime(created_at) DESC
-                    LIMIT 50
-                ''', (user_id,)) as cur:
-                    user_playlists = [dict(r) for r in await cur.fetchall()]
-
-                # Get all preference entries for full view
-                async with conn.execute('''
-                    SELECT artist, liked_song AS song, url, score
-                    FROM user_preferences
-                    WHERE user_id = ?
-                    ORDER BY score DESC
-                    LIMIT 100
-                ''', (user_id,)) as cur:
-                    all_preferences = [dict(r) for r in await cur.fetchall()]
-
         except Exception as e:
             return web.json_response({
                 "ok": False,
@@ -1662,8 +1646,6 @@ class WebServer(commands.Cog):
             "top_liked_tracks": top_liked,
             "top_disliked_tracks": top_disliked,
             "top_requested_tracks": top_requested,
-            "user_playlists": user_playlists,
-            "all_preferences": all_preferences,
         })
     
     async def stream_logs(self, request):
@@ -1762,14 +1744,15 @@ class WebServer(commands.Cog):
     <meta charset="UTF-8">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background: #0D0D0D;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #121212;
             color: #fff;
             padding: 20px;
         }
         .container { max-width: 800px; margin: 0 auto; }
-        h1 { color: #00D4FF; }
-        a { color: #00D4FF; text-decoration: none; }
+        h1 { color: #fff; font-weight: 900; }
+        a { color: #1db954; text-decoration: none; }
+        a:hover { color: #1ed760; }
     </style>
 </head>
 <body>
@@ -1827,30 +1810,6 @@ class WebServer(commands.Cog):
         state = guild_states[guild_id]
         guild = self.bot.get_guild(guild_id)
 
-        # Fetch user names from cache
-        user_names = {}
-        try:
-            async with aiosqlite.connect(vexo_db.db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                async with conn.execute("SELECT user_id, display_name, username FROM discord_users") as cur:
-                    for r in await cur.fetchall():
-                        uid = int(r["user_id"])
-                        user_names[uid] = (r["display_name"] or "").strip() or (r["username"] or "").strip() or f"User {uid}"
-        except Exception:
-            pass
-
-        def get_user_name(uid):
-            if not uid:
-                return None
-            uid = int(uid)
-            if uid in user_names:
-                return user_names[uid]
-            # Try to resolve from Discord
-            user = self.bot.get_user(uid)
-            if user:
-                return user.display_name
-            return f"User {uid}"
-
         # Current track
         current = None
         current_song = getattr(state, "current", None)
@@ -1860,7 +1819,7 @@ class WebServer(commands.Cog):
                 "title": getattr(current_song, "title", "Unknown"),
                 "artist": getattr(current_song, "author", "Unknown"),
                 "url": getattr(current_song, "webpage_url", None) or getattr(current_song, "url", None),
-                "requested_by": get_user_name(req_by) if req_by else None,
+                "requested_by": self._resolve_user_name(req_by) if req_by else None,
             }
 
         upcoming = []
@@ -1874,7 +1833,7 @@ class WebServer(commands.Cog):
                 "artist": getattr(song, "author", "Unknown"),
                 "url": getattr(song, "webpage_url", None) or getattr(song, "url", None),
                 "source": "request",
-                "for_user": {"user_id": str(req_by), "user_name": get_user_name(req_by)} if req_by else None,
+                "for_user": self._resolve_user_name(req_by) if req_by else None,
                 "reason": "Directly requested",
             })
 
@@ -1887,37 +1846,9 @@ class WebServer(commands.Cog):
                 "artist": getattr(song, "author", "Unknown"),
                 "url": getattr(song, "webpage_url", None) or getattr(song, "url", None),
                 "source": "autoplay",
-                "for_user": {"user_id": str(req_by), "user_name": get_user_name(req_by)} if req_by else None,
+                "for_user": self._resolve_user_name(req_by) if req_by else None,
                 "reason": "From autoplay buffer (discovery)",
             })
-
-        # 3. Session queue from DB with full reasoning
-        try:
-            db_queue = await vexo_db.get_session_queue(guild_id, "public")
-            for item in db_queue[:10]:
-                uid = item.get("user_id")
-                slot_type = item.get("slot_type", "discovery")
-                # Use stored reason if available, otherwise fallback
-                db_reason = item.get("reason")
-                matched = item.get("matched_song")
-                if db_reason:
-                    reason = db_reason
-                elif slot_type == "liked":
-                    reason = "From their likes"
-                else:
-                    reason = "Discovery: similar artists"
-                
-                upcoming.append({
-                    "title": item.get("song", "Unknown"),
-                    "artist": item.get("artist", "Unknown"),
-                    "url": item.get("url"),
-                    "source": "discovery",
-                    "for_user": {"user_id": str(uid), "user_name": get_user_name(uid)} if uid else None,
-                    "reason": reason,
-                    "matched_song": matched,
-                })
-        except Exception as e:
-            logger.warning(f"Failed to fetch session queue: {e}")
 
         return web.json_response({
             "ok": True,
@@ -2029,7 +1960,7 @@ class WebServer(commands.Cog):
             return web.json_response({"ok": True, "deleted": False, "message": "Playlist not found or not owned by user."})
 
     async def upcoming_view(self, request):
-        """Serve the upcoming tracks page."""
+        """Serve the upcoming tracks page with Spotify Premium styling."""
         html = """
 <!DOCTYPE html>
 <html>
@@ -2040,62 +1971,62 @@ class WebServer(commands.Cog):
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Segoe UI', Tahoma, sans-serif;
-            background: linear-gradient(135deg, #0D0D0D 0%, #1a1a2e 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #121212;
             color: #fff;
             min-height: 100vh;
             padding: 20px;
         }
         .container { max-width: 1000px; margin: 0 auto; }
-        h1 { color: #00D4FF; margin-bottom: 20px; }
+        h1 { color: #fff; margin-bottom: 20px; font-weight: 900; }
         .nav { margin-bottom: 20px; }
-        .nav a { color: #00D4FF; text-decoration: none; margin-right: 15px; }
-        .nav a:hover { text-decoration: underline; }
+        .nav a { color: #1db954; text-decoration: none; margin-right: 15px; }
+        .nav a:hover { color: #1ed760; }
         .current-track {
-            background: linear-gradient(135deg, #1a1a2e, #2d2d44);
-            border: 1px solid #00D4FF;
+            background: #181818;
+            border: 1px solid #282828;
             border-radius: 12px;
             padding: 20px;
             margin-bottom: 20px;
         }
-        .current-track h2 { color: #00FF88; font-size: 14px; margin-bottom: 10px; }
+        .current-track h2 { color: #1db954; font-size: 14px; margin-bottom: 10px; font-weight: 700; }
         .current-track .title { font-size: 20px; font-weight: bold; }
-        .current-track .artist { color: #888; }
+        .current-track .artist { color: #b3b3b3; }
         .upcoming-list { display: flex; flex-direction: column; gap: 10px; }
         .track-item {
-            background: rgba(255,255,255,0.05);
+            background: #282828;
             border-radius: 8px;
             padding: 15px;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
+        .track-item:hover { background: #333333; }
         .track-info { flex: 1; }
         .track-info .title { font-weight: 600; }
-        .track-info .artist { color: #888; font-size: 14px; }
+        .track-info .artist { color: #b3b3b3; font-size: 14px; }
         .track-meta { text-align: right; font-size: 12px; }
         .track-meta .source { 
             display: inline-block;
             padding: 3px 8px;
             border-radius: 4px;
             margin-bottom: 5px;
+            background: #1db954;
+            color: #000;
         }
-        .source.request { background: #00FF88; color: #000; }
-        .source.autoplay { background: #00D4FF; color: #000; }
-        .source.discovery { background: #FFaa00; color: #000; }
-        .track-meta .reason { color: #888; }
-        .track-meta .for-user { color: #00D4FF; }
-        .empty { color: #888; text-align: center; padding: 40px; }
+        .track-meta .reason { color: #b3b3b3; }
+        .track-meta .for-user { color: #1db954; }
+        .empty { color: #b3b3b3; text-align: center; padding: 40px; }
         .refresh-btn {
-            background: #00D4FF;
+            background: #1db954;
             color: #000;
             border: none;
             padding: 10px 20px;
-            border-radius: 6px;
+            border-radius: 500px;
             cursor: pointer;
             font-weight: bold;
         }
-        .refresh-btn:hover { background: #00a8cc; }
+        .refresh-btn:hover { background: #1ed760; }
     </style>
 </head>
 <body>
@@ -2108,7 +2039,7 @@ class WebServer(commands.Cog):
         <h1>🎵 Upcoming Tracks</h1>
         <button class="refresh-btn" onclick="loadUpcoming()">🔄 Refresh</button>
         <div id="current" style="margin-top: 20px;"></div>
-        <h2 style="margin: 20px 0 10px; color: #00D4FF;">Up Next</h2>
+        <h2 style="margin: 20px 0 10px; color: #1db954;">Up Next</h2>
         <div id="upcoming" class="upcoming-list"></div>
     </div>
     <script>
@@ -2149,9 +2080,9 @@ class WebServer(commands.Cog):
                             <div class="artist">${escapeHtml(t.artist)}</div>
                         </div>
                         <div class="track-meta">
-                            <div class="source ${t.source}">${t.source.toUpperCase()}</div>
-                            ${t.for_user ? '<div class="for-user">' + escapeHtml(t.for_user.user_name) + "'s slot</div>" : ''}
-                            <div class="reason">${escapeHtml(t.reason)}${t.matched_song ? " (" + escapeHtml(t.matched_song) + ")" : ""}</div>
+                            <div class="source">${t.source.toUpperCase()}</div>
+                            ${t.for_user ? '<div class="for-user">' + escapeHtml(t.for_user) + "'s slot</div>" : ''}
+                            <div class="reason">${escapeHtml(t.reason)}</div>
                         </div>
                     </div>
                 `).join('');
@@ -2174,7 +2105,7 @@ class WebServer(commands.Cog):
         return web.Response(text=html, content_type='text/html')
 
     async def pool_view(self, request):
-        """Serve the global pool management page."""
+        """Serve the global pool management page with Spotify Premium styling."""
         html = """
 <!DOCTYPE html>
 <html>
@@ -2185,26 +2116,27 @@ class WebServer(commands.Cog):
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Segoe UI', Tahoma, sans-serif;
-            background: linear-gradient(135deg, #0D0D0D 0%, #1a1a2e 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #121212;
             color: #fff;
             min-height: 100vh;
             padding: 20px;
         }
         .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #00D4FF; margin-bottom: 10px; }
-        .subtitle { color: #888; margin-bottom: 20px; }
+        h1 { color: #fff; margin-bottom: 10px; font-weight: 900; }
+        .subtitle { color: #b3b3b3; margin-bottom: 20px; }
         .nav { margin-bottom: 20px; }
-        .nav a { color: #00D4FF; text-decoration: none; margin-right: 15px; }
-        .nav a:hover { text-decoration: underline; }
-        .stats { background: rgba(0,212,255,0.1); padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .stats span { margin-right: 20px; }
+        .nav a { color: #1db954; text-decoration: none; margin-right: 15px; }
+        .nav a:hover { color: #1ed760; }
+        .stats { background: #282828; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .stats span { margin-right: 20px; color: #b3b3b3; }
         table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
-        th { background: rgba(0,212,255,0.2); color: #00D4FF; }
-        tr:hover { background: rgba(255,255,255,0.05); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #282828; }
+        th { background: #1a1a1a; color: #1db954; }
+        td { color: #b3b3b3; }
+        tr:hover { background: #1a1a1a; }
         .delete-btn {
-            background: #FF3366;
+            background: #ff3366;
             color: #fff;
             border: none;
             padding: 5px 12px;
@@ -2212,21 +2144,23 @@ class WebServer(commands.Cog):
             cursor: pointer;
             font-size: 12px;
         }
-        .delete-btn:hover { background: #cc2952; }
+        .delete-btn:hover { background: #ff1744; }
         .delete-btn:disabled { background: #666; cursor: not-allowed; }
         .pagination { margin-top: 20px; display: flex; gap: 10px; }
         .pagination button {
-            background: #00D4FF;
+            background: #1db954;
             color: #000;
             border: none;
             padding: 8px 16px;
-            border-radius: 4px;
+            border-radius: 500px;
             cursor: pointer;
+            font-weight: bold;
         }
-        .pagination button:disabled { background: #444; color: #888; cursor: not-allowed; }
-        .empty { color: #888; text-align: center; padding: 40px; }
+        .pagination button:disabled { background: #404040; color: #b3b3b3; cursor: not-allowed; }
+        .empty { color: #b3b3b3; text-align: center; padding: 40px; }
         .url { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .url a { color: #00D4FF; text-decoration: none; }
+        .url a { color: #1db954; text-decoration: none; }
+        .url a:hover { color: #1ed760; }
     </style>
 </head>
 <body>
