@@ -11,6 +11,7 @@ import logging
 logger = logging.getLogger('MusicBot.Settings')
 
 LOGGING_LEVEL = logging.INFO
+VERSION_NUMBER = "2.07.15"
 
 # Default settings for a guild
 DEFAULT_SETTINGS = {

@@ -68,6 +68,8 @@ class WebServer(commands.Cog):
         self.app.router.add_get('/logs/view', self.index)
         self.app.router.add_get('/logs/watchtower', self.watchtower_logs_view)
         self.app.router.add_get('/api/stats', self.api_stats)
+        self.app.router.add_get('/api/users', self.api_users)
+        self.app.router.add_get('/api/user/stats', self.api_user_stats)
         self.app.router.add_get('/api/logs/file', self.api_log_file)
         self.app.router.add_get('/api/docker/logs', self.api_docker_logs)
         self.app.router.add_get('/logs', self.get_logs)
@@ -211,6 +213,26 @@ class WebServer(commands.Cog):
             color: #00D4FF;
         }
         .btn.secondary:hover { background: #111; }
+        .filter-row {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        select {
+            background: #0f0f0f;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 8px 10px;
+            border-radius: 5px;
+        }
+        h3 {
+            margin-top: 14px;
+            margin-bottom: 8px;
+            font-size: 1.05em;
+            color: #00FF88;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -289,6 +311,20 @@ class WebServer(commands.Cog):
                 <div id="recentPlays" class="muted">Loading...</div>
             </div>
         </div>
+
+        <div class="grid">
+            <div class="card" style="grid-column: 1 / -1;">
+                <h2>🔎 User Drilldown</h2>
+                <div class="filter-row">
+                    <label for="userSelect" class="status-label">User</label>
+                    <select id="userSelect" onchange="onUserSelectChange()">
+                        <option value="">Select a user...</option>
+                    </select>
+                    <span id="userSelectStatus" class="muted"></span>
+                </div>
+                <div id="userDrilldown" class="muted">Select a user to see their top liked and requested tracks.</div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -299,6 +335,8 @@ class WebServer(commands.Cog):
 
         loadStats();
         setInterval(loadStats, 15000);
+
+        loadUserList();
 
         function loadStatus() {
             fetch('/status')
@@ -455,6 +493,106 @@ class WebServer(commands.Cog):
             const thead = headers.map(h => `<th>${escapeHtml(h)}</th>`).join('');
             const tbody = rows.map(cols => `<tr>${cols.map(c => `<td>${c}</td>`).join('')}</tr>`).join('');
             return `<table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+        }
+
+        function loadUserList() {
+            const status = document.getElementById('userSelectStatus');
+            if (status) status.textContent = 'Loading users...';
+
+            fetch('/api/users')
+                .then(r => r.json())
+                .then(data => {
+                    if (!data || data.ok === false) {
+                        const msg = data && data.error ? data.error : 'Unknown error';
+                        if (status) status.textContent = msg;
+                        return;
+                    }
+
+                    const users = Array.isArray(data.users) ? data.users : [];
+                    const select = document.getElementById('userSelect');
+                    const current = select.value;
+                    select.innerHTML = '<option value="">Select a user...</option>';
+
+                    users.forEach(u => {
+                        const id = String(u.user_id ?? '');
+                        if (!id) return;
+                        const name = u.user_name ? String(u.user_name) : ('User ' + id);
+                        const opt = document.createElement('option');
+                        opt.value = id;
+                        opt.textContent = name + ' (' + id + ')';
+                        select.appendChild(opt);
+                    });
+
+                    if (current) {
+                        select.value = current;
+                    }
+
+                    if (status) status.textContent = users.length ? (users.length + ' users') : 'No users yet';
+                })
+                .catch(err => {
+                    if (status) status.textContent = 'Failed to load users: ' + err;
+                });
+        }
+
+        function onUserSelectChange() {
+            const select = document.getElementById('userSelect');
+            const userId = select.value;
+            const out = document.getElementById('userDrilldown');
+
+            if (!userId) {
+                out.innerHTML = 'Select a user to see their top liked and requested tracks.';
+                return;
+            }
+
+            out.innerHTML = 'Loading user stats...';
+
+            fetch('/api/user/stats?user_id=' + encodeURIComponent(userId) + '&limit=' + encodeURIComponent(String(MAX_ROWS)))
+                .then(r => r.json())
+                .then(data => {
+                    if (!data || data.ok === false) {
+                        const msg = data && data.error ? data.error : 'Unknown error';
+                        out.innerHTML = `<div class="error">${escapeHtml(msg)}</div>`;
+                        return;
+                    }
+
+                    const user = data.user || {};
+                    const liked = Array.isArray(data.top_liked_tracks) ? data.top_liked_tracks : [];
+                    const requested = Array.isArray(data.top_requested_tracks) ? data.top_requested_tracks : [];
+
+                    let html = `<div class="muted">User: <b>${escapeHtml(user.user_name || ('User ' + String(user.user_id || userId)))}</b> (${escapeHtml(String(user.user_id || userId))})</div>`;
+
+                    html += '<h3>Most Liked Tracks</h3>';
+                    if (!liked.length) {
+                        html += '<div class="muted">No liked tracks recorded yet.</div>';
+                    } else {
+                        html += tableHtml(
+                            ['Track', 'Score'],
+                            liked.map(r => [
+                                `${escapeHtml(r.artist || 'Unknown')} — ${escapeHtml(r.song || 'Unknown')}`,
+                                escapeHtml(String(r.score ?? 0)),
+                            ])
+                        );
+                    }
+
+                    html += '<h3>Most Requested Tracks</h3>';
+                    if (!requested.length) {
+                        html += '<div class="muted">No request history recorded yet.</div>';
+                    } else {
+                        html += tableHtml(
+                            ['Track', 'Plays', 'Last Played'],
+                            requested.map(r => [
+                                `${escapeHtml(r.artist || 'Unknown')} — ${escapeHtml(r.song || 'Unknown')}`,
+                                escapeHtml(String(r.plays ?? 0)),
+                                escapeHtml(String(r.last_played || '')),
+                            ])
+                        );
+                    }
+
+                    out.innerHTML = html;
+                })
+                .catch(err => {
+                    out.innerHTML = `<div class="error">Failed to load user stats: ${escapeHtml(err)}</div>`;
+                });
         }
 
         function testSpotify(btn) {
@@ -1296,6 +1434,114 @@ class WebServer(commands.Cog):
             }
         }
         return web.json_response(payload)
+
+    async def api_users(self, request):
+        """List known users from preferences and request history."""
+        from database import db as vexo_db
+
+        db_path = vexo_db.db_path
+        db_file = Path(db_path)
+        if not db_file.exists():
+            return web.json_response({
+                "ok": False,
+                "error": f"Database not found at {db_path}.",
+            }, status=404)
+
+        user_ids: set[int] = set()
+        try:
+            async with aiosqlite.connect(db_path) as conn:
+                async with conn.execute("SELECT DISTINCT user_id FROM user_preferences") as cur:
+                    for row in await cur.fetchall():
+                        if row and row[0] is not None:
+                            user_ids.add(int(row[0]))
+
+                async with conn.execute(
+                    "SELECT DISTINCT user_requesting FROM playback_history WHERE user_requesting IS NOT NULL"
+                ) as cur:
+                    for row in await cur.fetchall():
+                        if row and row[0] is not None:
+                            user_ids.add(int(row[0]))
+        except Exception as e:
+            return web.json_response({
+                "ok": False,
+                "error": f"User list query failed: {e}",
+            }, status=500)
+
+        users = [
+            {"user_id": uid, "user_name": self._resolve_user_name(uid)}
+            for uid in user_ids
+        ]
+        users.sort(key=lambda u: ((u.get("user_name") or "").lower(), int(u.get("user_id") or 0)))
+
+        return web.json_response({
+            "ok": True,
+            "users": users,
+        })
+
+    async def api_user_stats(self, request):
+        """Per-user breakdown: top liked tracks + most-requested tracks."""
+        user_id_raw = (request.query.get("user_id") or "").strip()
+        if not user_id_raw:
+            return web.json_response({"ok": False, "error": "Missing user_id."}, status=400)
+
+        try:
+            user_id = int(user_id_raw)
+        except ValueError:
+            return web.json_response({"ok": False, "error": "Invalid user_id."}, status=400)
+
+        try:
+            limit = int(request.query.get("limit") or "10")
+        except ValueError:
+            limit = 10
+        limit = max(3, min(limit, 50))
+
+        from database import db as vexo_db
+
+        db_path = vexo_db.db_path
+        db_file = Path(db_path)
+        if not db_file.exists():
+            return web.json_response({
+                "ok": False,
+                "error": f"Database not found at {db_path}.",
+            }, status=404)
+
+        top_liked = []
+        top_requested = []
+        try:
+            async with aiosqlite.connect(db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+
+                async with conn.execute('''
+                    SELECT artist, liked_song AS song, url, score
+                    FROM user_preferences
+                    WHERE user_id = ? AND score > 0
+                    ORDER BY score DESC
+                    LIMIT ?
+                ''', (user_id, limit)) as cur:
+                    top_liked = [dict(r) for r in await cur.fetchall()]
+
+                async with conn.execute('''
+                    SELECT artist, song, url, COUNT(*) AS plays, MAX(timestamp) AS last_played
+                    FROM playback_history
+                    WHERE user_requesting = ?
+                    GROUP BY url, artist, song
+                    ORDER BY plays DESC, datetime(last_played) DESC
+                    LIMIT ?
+                ''', (user_id, limit)) as cur:
+                    top_requested = [dict(r) for r in await cur.fetchall()]
+
+        except Exception as e:
+            return web.json_response({
+                "ok": False,
+                "error": f"User stats query failed: {e}",
+            }, status=500)
+
+        return web.json_response({
+            "ok": True,
+            "user": {"user_id": user_id, "user_name": self._resolve_user_name(user_id)},
+            "top_liked_tracks": top_liked,
+            "top_requested_tracks": top_requested,
+        })
     
     async def stream_logs(self, request):
         """Server-Sent Events stream for real-time logs."""

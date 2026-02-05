@@ -60,6 +60,7 @@ class Song:
     duration: int  # in seconds
     thumbnail: Optional[str] = None
     author: str = "Unknown"
+    requested_by: Optional[int] = None
 
 
 @dataclass
@@ -492,7 +493,13 @@ class Music(commands.Cog):
         if state.current:
             asyncio.run_coroutine_threadsafe(
                 # Store stable URL for "recently played" checks (Song.url can be a temporary stream URL)
-                db.add_to_history(guild_id, state.current.author, state.current.title, state.current.webpage_url or state.current.url),
+                db.add_to_history(
+                    guild_id,
+                    state.current.author,
+                    state.current.title,
+                    state.current.webpage_url or state.current.url,
+                    getattr(state.current, "requested_by", None),
+                ),
                 self.bot.loop
             )
         
@@ -576,7 +583,7 @@ class Music(commands.Cog):
         if state.is_autoplay and state.autoplay_visible:
             next_up = state.autoplay_visible[0]
             embed.add_field(
-                name="🎲 Autoplay Next",
+                name="<:di:1468760195495628861> Autoplay Next",
                 value=f"{next_up.title[:40]}..." if len(next_up.title) > 40 else next_up.title,
                 inline=False
             )
@@ -950,6 +957,9 @@ class Music(commands.Cog):
             )
             return
 
+        for s in songs:
+            s.requested_by = interaction.user.id
+
         # Record interaction for first song
         await discovery_engine.record_interaction(
             interaction.user.id,
@@ -1099,6 +1109,9 @@ class Music(commands.Cog):
                     embed=create_error_embed(f"No songs found in playlist: `{query}`")
                 )
                 return
+
+            for s in songs:
+                s.requested_by = interaction.user.id
             
             # Record interaction for first song
             await discovery_engine.record_interaction(
@@ -1136,6 +1149,8 @@ class Music(commands.Cog):
                     embed=create_error_embed(f"No results found for: `{query}`")
                 )
                 return
+
+            song.requested_by = interaction.user.id
             
             # Record "request" interaction
             await discovery_engine.record_interaction(
@@ -1360,7 +1375,7 @@ class Music(commands.Cog):
         embed = create_queue_embed(full_queue, state.current, page)
         
         # Footers for transparency
-        footer_parts = [f"🎲 Autoplay ({len(state.autoplay_visible)} visible, {len(state.autoplay_hidden)} hidden)"]
+        footer_parts = [f"<:di:1468760195495628861> Autoplay ({len(state.autoplay_visible)} visible, {len(state.autoplay_hidden)} hidden)"]
         
         existing = embed.footer.text if embed.footer else ""
         new_footer = f"{existing} • {' • '.join(footer_parts)}".strip(" •")
@@ -1407,9 +1422,9 @@ class Music(commands.Cog):
         asyncio.create_task(db.set_setting(interaction.guild.id, "loop_mode", mode))
         
         mode_display = {
-            "off": "🚫 Loop disabled",
-            "song": "🔂 Looping current song",
-            "queue": "🔁 Looping entire queue"
+            "off": "<:stop:1468764262477463729> Loop disabled",
+            "song": "<:ra:1468742761548349753> Looping current song",
+            "queue": "<:ra:1468742761548349753> Looping entire queue"
         }
         
         await interaction.response.send_message(
@@ -1434,13 +1449,13 @@ class Music(commands.Cog):
             asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
             
             await interaction.response.send_message(
-                embed=create_success_embed("🎲 **Autoplay Enabled**\nI'll play similar songs based on the audience vibe!")
+                embed=create_success_embed("<:di:1468760195495628861> **Autoplay Enabled**\nI'll play similar songs based on the audience vibe!")
             )
         else:
             state.autoplay_visible.clear()
             state.autoplay_hidden.clear()
             await interaction.response.send_message(
-                embed=create_success_embed("🎲 **Autoplay Disabled**")
+                embed=create_success_embed("<:di:1468760195495628861> **Autoplay Disabled**")
             )
     
     @app_commands.command(name="favorites", description="Manage favorite artists for autoplay (Admin only)")
@@ -1500,7 +1515,7 @@ class Music(commands.Cog):
         if state.is_autoplay and state.autoplay_visible:
             next_up = state.autoplay_visible[0]
             embed.add_field(
-                name="🎲 Autoplay Next",
+                name="<:di:1468760195495628861> Autoplay Next",
                 value=f"{next_up.title[:40]}..." if len(next_up.title) > 40 else next_up.title,
                 inline=False
             )

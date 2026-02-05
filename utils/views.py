@@ -43,7 +43,7 @@ class MusicControlView(ui.View):
         
         # Update play/pause button
         if state.voice_client and state.voice_client.is_paused():
-            self.play_pause_button.emoji = "▶️"
+            self.play_pause_button.emoji = "<:pl:1468753784523067505>"
             self.play_pause_button.style = discord.ButtonStyle.success
         else:
             self.play_pause_button.emoji = "<:pa:1468742763129344184>"
@@ -62,7 +62,7 @@ class MusicControlView(ui.View):
     async def _check_voice(self, interaction: discord.Interaction) -> bool:
         """Check if user is in the same voice channel as the bot."""
         if not interaction.guild:
-            await interaction.response.send_message("❌ This only works in a server!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> This only works in a server!", ephemeral=True)
             return False
         
         member = interaction.user
@@ -71,11 +71,11 @@ class MusicControlView(ui.View):
         
         vc = interaction.guild.voice_client
         if not vc:
-            await interaction.response.send_message("❌ I'm not connected to a voice channel!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> I'm not connected to a voice channel!", ephemeral=True)
             return False
         
         if not member.voice or member.voice.channel != vc.channel:
-            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> You must be in the same voice channel!", ephemeral=True)
             return False
         
         return True
@@ -95,11 +95,11 @@ class MusicControlView(ui.View):
             await interaction.response.edit_message(view=self)
         elif vc.is_playing():
             vc.pause()
-            button.emoji = "▶️"
+            button.emoji = "<:pl:1468753784523067505>"
             button.style = discord.ButtonStyle.success
             await interaction.response.edit_message(view=self)
         else:
-            await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
     
     @ui.button(emoji="<:sk:1468742764165337280>", style=discord.ButtonStyle.primary, row=0)
     async def skip_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -115,7 +115,7 @@ class MusicControlView(ui.View):
             vc.stop()  # This triggers play_next
             await interaction.response.send_message(f"<:sk:1468742764165337280> Skipped: **{title}**", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
     
     @ui.button(emoji="<:st:1468742765327286426>", style=discord.ButtonStyle.danger, row=0)
     async def stop_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -147,7 +147,7 @@ class MusicControlView(ui.View):
         state = self._get_state()
         
         if not state.queue:
-            await interaction.response.send_message("❌ The queue is empty!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> The queue is empty!", ephemeral=True)
             return
         
         random.shuffle(state.queue)
@@ -168,7 +168,7 @@ class MusicControlView(ui.View):
         
         # Update button appearance
         loop_info = {
-            "off": (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>", "🚫 Loop disabled"),
+            "off": (discord.ButtonStyle.secondary, "<:ra:1468742761548349753>", "<:stop:1468764262477463729> Loop disabled"),
             "song": (discord.ButtonStyle.primary, "<:ra:1468742761548349753>", "<:ra:1468742761548349753> Looping current song"),
             "queue": (discord.ButtonStyle.success, "<:ra:1468742761548349753>", "<:ra:1468742761548349753> Looping entire queue"),
         }
@@ -262,7 +262,7 @@ class AutoplayPreviewView(ui.View):
         
         # Add refresh button
         refresh_btn = ui.Button(
-            emoji="🔄",
+            emoji="<:ra:1468742761548349753>",
             label="Refresh",
             style=discord.ButtonStyle.secondary,
             custom_id="refresh",
@@ -280,7 +280,7 @@ class AutoplayPreviewView(ui.View):
     async def _check_voice(self, interaction: discord.Interaction) -> bool:
         """Check if user is in the same voice channel as the bot."""
         if not interaction.guild:
-            await interaction.response.send_message("❌ This only works in a server!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> This only works in a server!", ephemeral=True)
             return False
         
         member = interaction.user
@@ -289,11 +289,11 @@ class AutoplayPreviewView(ui.View):
         
         vc = interaction.guild.voice_client
         if not vc:
-            await interaction.response.send_message("❌ I'm not connected to a voice channel!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> I'm not connected to a voice channel!", ephemeral=True)
             return False
         
         if not member.voice or member.voice.channel != vc.channel:
-            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> You must be in the same voice channel!", ephemeral=True)
             return False
         
         return True
@@ -307,7 +307,7 @@ class AutoplayPreviewView(ui.View):
         
         if index >= len(state.autoplay_visible):
             await interaction.response.send_message(
-                "❌ That song is no longer in the buffer!", 
+                "<:cr:1468763462942457999> That song is no longer in the buffer!", 
                 ephemeral=True
             )
             return
@@ -374,7 +374,7 @@ class NowPlayingView(ui.View):
         # Play/Pause
         is_paused = state.voice_client and state.voice_client.is_paused()
         play_pause = ui.Button(
-            emoji="▶️" if is_paused else "<:pa:1468742763129344184>",
+            emoji="<:pl:1468753784523067505>" if is_paused else "<:pa:1468742763129344184>",
             style=discord.ButtonStyle.success if is_paused else discord.ButtonStyle.secondary,
             custom_id="play_pause",
             row=0
@@ -419,14 +419,14 @@ class NowPlayingView(ui.View):
         
         # Autoplay toggle
         autoplay_style = discord.ButtonStyle.success if state.is_autoplay else discord.ButtonStyle.secondary
-        autoplay = ui.Button(emoji="🎲", style=autoplay_style, custom_id="autoplay", row=1)
+        autoplay = ui.Button(emoji="<:di:1468760195495628861>", style=autoplay_style, custom_id="autoplay", row=1)
         autoplay.callback = self._autoplay_callback
         self.add_item(autoplay)
         
         # Show upcoming (only if autoplay is on)
         if state.is_autoplay and state.autoplay_visible:
             upcoming = ui.Button(
-                emoji="📋", 
+                emoji="<:shc:1468761592329142374>", 
                 label=f"Upcoming ({len(state.autoplay_visible)})",
                 style=discord.ButtonStyle.primary, 
                 custom_id="upcoming", 
@@ -447,7 +447,7 @@ class NowPlayingView(ui.View):
     async def _check_voice(self, interaction: discord.Interaction) -> bool:
         """Check if user is in the same voice channel as the bot, or auto-connect if not connected."""
         if not interaction.guild:
-            await interaction.response.send_message("❌ This only works in a server!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> This only works in a server!", ephemeral=True)
             return False
         
         member = interaction.user
@@ -463,9 +463,9 @@ class NowPlayingView(ui.View):
             
             if not member.voice or not member.voice.channel:
                 if is_mod:
-                    await interaction.response.send_message("❌ You must be in a voice channel to connect the bot!", ephemeral=True)
+                    await interaction.response.send_message("<:cr:1468763462942457999> You must be in a voice channel to connect the bot!", ephemeral=True)
                 else:
-                    await interaction.response.send_message("❌ I'm not connected. Join a voice channel first!", ephemeral=True)
+                    await interaction.response.send_message("<:cr:1468763462942457999> I'm not connected. Join a voice channel first!", ephemeral=True)
                 return False
             
             # Auto-connect to user's voice channel
@@ -475,13 +475,13 @@ class NowPlayingView(ui.View):
                 state.voice_client = vc
                 state.text_channel = interaction.channel
             except Exception as e:
-                await interaction.response.send_message(f"❌ Failed to connect: {e}", ephemeral=True)
+                await interaction.response.send_message(f"<:cr:1468763462942457999> Failed to connect: {e}", ephemeral=True)
                 return False
         
         # Check if user is in same channel (mods can skip this check)
         is_mod = member.guild_permissions.administrator or member.guild_permissions.manage_guild
         if not is_mod and (not member.voice or member.voice.channel != vc.channel):
-            await interaction.response.send_message("❌ You must be in the same voice channel!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> You must be in the same voice channel!", ephemeral=True)
             return False
         
         return True
@@ -496,7 +496,7 @@ class NowPlayingView(ui.View):
         
         if vc.is_paused():
             vc.resume()
-            await interaction.response.send_message(f"▶️ **{interaction.user.display_name}** resumed playback")
+            await interaction.response.send_message(f"<:pl:1468753784523067505> **{interaction.user.display_name}** resumed playback")
         elif vc.is_playing():
             vc.pause()
             await interaction.response.send_message(f"<:pa:1468742763129344184> **{interaction.user.display_name}** paused playback")
@@ -512,11 +512,11 @@ class NowPlayingView(ui.View):
                 # Play the suggested song
                 self.cog._play_song(self.guild_id, song_to_play)
                 await interaction.response.send_message(
-                    f"▶️ **{interaction.user.display_name}** started playing: **{song_to_play.title}**"
+                    f"<:pl:1468753784523067505> **{interaction.user.display_name}** started playing: **{song_to_play.title}**"
                 )
             else:
                 await interaction.response.send_message(
-                    "❌ Nothing to play! Use `/play <song>` to add a song.", 
+                    "<:cr:1468763462942457999> Nothing to play! Use `/play <song>` to add a song.", 
                     ephemeral=True
                 )
     
@@ -544,7 +544,7 @@ class NowPlayingView(ui.View):
             vc.stop()
             await interaction.response.send_message(f"<:sk:1468742764165337280> **{interaction.user.display_name}** skipped: **{title}**")
         else:
-            await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
     
     async def _stop_callback(self, interaction: discord.Interaction):
         """Stop playback."""
@@ -574,7 +574,7 @@ class NowPlayingView(ui.View):
         state = self._get_state()
         
         if not state.queue:
-            await interaction.response.send_message("❌ Queue is empty!", ephemeral=True)
+            await interaction.response.send_message("<:cr:1468763462942457999> Queue is empty!", ephemeral=True)
             return
         
         random.shuffle(state.queue)
@@ -591,7 +591,7 @@ class NowPlayingView(ui.View):
         state.loop_mode = modes[(current_idx + 1) % len(modes)]
         
         messages = {
-            "off": "🚫 Loop disabled",
+            "off": "<:stop:1468764262477463729> Loop disabled",
             "song": "<:ra:1468742761548349753> Looping current song",
             "queue": "<:ra:1468742761548349753> Looping entire queue"
         }
@@ -639,11 +639,11 @@ class NowPlayingView(ui.View):
         if state.is_autoplay:
             # Trigger buffer refill
             asyncio.create_task(self.cog._refill_autoplay_buffer(self.guild_id))
-            await interaction.response.send_message(f"🎲 Autoplay **enabled** by **{interaction.user.display_name}**!")
+            await interaction.response.send_message(f"<:di:1468760195495628861> Autoplay **enabled** by **{interaction.user.display_name}**!")
         else:
             state.autoplay_visible.clear()
             state.autoplay_hidden.clear()
-            await interaction.response.send_message(f"🎲 Autoplay **disabled** by **{interaction.user.display_name}** (Queues cleared).")
+            await interaction.response.send_message(f"<:di:1468760195495628861> Autoplay **disabled** by **{interaction.user.display_name}** (Queues cleared).")
     
     async def _upcoming_callback(self, interaction: discord.Interaction):
         """Show upcoming autoplay songs with jump buttons."""
@@ -653,7 +653,7 @@ class NowPlayingView(ui.View):
         
         if not state.autoplay_visible:
             await interaction.response.send_message(
-                "❌ No songs in autoplay buffer! Enable autoplay first.",
+                "<:cr:1468763462942457999> No songs in autoplay buffer! Enable autoplay first.",
                 ephemeral=True
             )
             return
@@ -667,7 +667,7 @@ class NowPlayingView(ui.View):
         """Record an upvote."""
         state = self._get_state()
         if not state.current:
-            return await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+            return await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
             
         await discovery_engine.record_interaction(
             interaction.user.id, 
@@ -682,7 +682,7 @@ class NowPlayingView(ui.View):
         """Record a downvote."""
         state = self._get_state()
         if not state.current:
-            return await interaction.response.send_message("❌ Nothing is playing!", ephemeral=True)
+            return await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
             
         await discovery_engine.record_interaction(
             interaction.user.id, 

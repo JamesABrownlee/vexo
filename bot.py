@@ -7,6 +7,7 @@ import logging
 import discord
 from discord.ext import commands
 
+from utils.settings import VERSION_NUMBER
 from config import Config
 from utils.logger import set_logger
 
@@ -56,7 +57,7 @@ class MusicBot(commands.Bot):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logger.info(f"Connected to {len(self.guilds)} guild(s)")
         logger.info("━" * 50)
-        logger.info("🎵 Vexo 2.07.15 is ready!")
+        logger.info(f"🎵 Vexo {VERSION_NUMBER} is ready!")
         logger.info("━" * 50)
 
 

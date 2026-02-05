@@ -5,6 +5,8 @@ import logging
 from config import Config
 from utils.logger import set_logger
 
+
+
 logger = set_logger(logging.getLogger('Vexo.Settings'))
 
 class Settings(commands.Cog):
