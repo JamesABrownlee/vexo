@@ -5,6 +5,18 @@ Uses a black and neon blue color scheme.
 import discord
 from typing import Optional, List, TYPE_CHECKING
 from config import Config
+from utils.settings import VERSION_NUMBER, BUILD_NUMBER, VERSION_TYPE
+
+def _set_footer(embed: discord.Embed, state: "GuildMusicState"):
+    """Helper to set footer with volume, 24/7, and autoplay status."""
+    footer_parts = [f"🔊 {int(state.volume * 100)}%"]
+    if state.is_24_7:
+        footer_parts.append("📻 24/7")
+    if state.is_autoplay:
+        footer_parts.append("<:di:1468760195495628861> Autoplay")
+    if VERSION_TYPE == "DEVELOPMENT":
+        footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
+    embed.set_footer(text=" • ".join(footer_parts))
 
 if TYPE_CHECKING:
     from cogs.music import Song, GuildMusicState
@@ -83,7 +95,10 @@ def create_now_playing_embed(song: "Song", state: "GuildMusicState") -> discord.
     if state.is_24_7:
         footer_parts.append("📻 24/7")
     if state.is_autoplay:
-        footer_parts.append("🎲 Autoplay")
+        footer_parts.append("<:di:1468760195495628861> Autoplay")
+    if VERSION_TYPE == "DEVELOPMENT":
+        footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
+    
     embed.set_footer(text=" • ".join(footer_parts))
     
     return embed
@@ -223,7 +238,9 @@ def create_idle_embed(state: "GuildMusicState", suggestion: Optional["Song"] = N
     if state.is_24_7:
         footer_parts.append("📻 24/7")
     if state.is_autoplay:
-        footer_parts.append("🎲 Autoplay")
+        footer_parts.append("<:di:1468760195495628861> Autoplay")
+    if VERSION_TYPE == "DEVELOPMENT":
+        footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     embed.set_footer(text=" • ".join(footer_parts))
     
     return embed
@@ -250,7 +267,7 @@ def create_upcoming_autoplay_embed(songs: list) -> discord.Embed:
         songs: List of Song objects (max 5)
     """
     embed = discord.Embed(
-        title="🎲 Upcoming Autoplay Songs",
+        title="<:di:1468760195495628861> Upcoming Autoplay Songs",
         description="Click a number button to jump to that song!",
         color=Config.COLOR_PRIMARY
     )
