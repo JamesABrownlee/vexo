@@ -276,8 +276,10 @@ class WebServer(commands.Cog):
             <div class="card">
                 <h2>🎛️ Quick Actions</h2>
                 <div id="quickActions" style="padding: 10px 0;">
-                    <button class="btn" onclick="window.location.href='/logs/view'">📝 Vexo Logs</button>
-                    <button class="btn" onclick="window.location.href='/logs/watchtower'">🧭 Watchtower Logs</button>
+                    <button class="btn" onclick="window.location.href='/upcoming'">🎵 Upcoming</button>
+                    <button class="btn" onclick="window.location.href='/pool'">🎶 Global Pool</button>
+                    <button class="btn secondary" onclick="window.location.href='/logs/view'">📝 Logs</button>
+                    <button class="btn secondary" onclick="window.location.href='/logs/watchtower'">🧭 Watchtower</button>
                     <button class="btn secondary" onclick="window.location.href='/settings'">⚙️ Settings</button>
                 </div>
                 <div id="spotifyTestResult" style="padding: 6px 0; color: #888;"></div>
