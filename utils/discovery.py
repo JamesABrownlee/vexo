@@ -416,7 +416,8 @@ class DiscoveryEngine:
                             liked_info = artist_to_liked.get(liked_artist)
                             if liked_info:
                                 matched_song = liked_info.get('liked_song', 'Unknown')
-                        reasons.append(f"Genre match ({track_genre.split(',')[0].strip().strip('\"[]')})")
+                        genre_label = track_genre.split(',')[0].strip().strip('"[]')
+                        reasons.append(f"Genre match ({genre_label})")
                         break  # Count genre match once
 
             # --- D. Collaborative filtering ---
