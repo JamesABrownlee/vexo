@@ -32,6 +32,43 @@ from utils.spotify import fetch_playlist_tracks, SpotifyError
 
 logger = set_logger(logging.getLogger('Vexo.Music'))
 
+def _extract_genre(info: Optional[dict]) -> Optional[str]:
+    if not isinstance(info, dict):
+        return None
+
+    for key in ("genre", "music_genre", "track_genre"):
+        val = info.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    for key in ("genres", "music_genres", "categories"):
+        val = info.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        if isinstance(val, (list, tuple, set)):
+            parts = [str(x).strip() for x in val if x]
+            parts = [p for p in parts if p]
+            if not parts:
+                continue
+            seen = set()
+            dedup = []
+            for p in parts:
+                low = p.lower()
+                if low in seen:
+                    continue
+                seen.add(low)
+                dedup.append(p)
+            joined = ", ".join(dedup[:3])
+            if len(joined) > 100:
+                joined = joined[:97] + "..."
+            return joined
+
+    val = info.get("category")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+
+    return None
+
 async def genre_autocomplete(
     interaction: discord.Interaction,
     current: str
@@ -60,6 +97,7 @@ class Song:
     duration: int  # in seconds
     thumbnail: Optional[str] = None
     author: str = "Unknown"
+    genre: Optional[str] = None
     requested_by: Optional[int] = None
 
 
@@ -132,6 +170,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.duration = data.get('duration', 0)
         self.thumbnail = data.get('thumbnail')
         self.author = data.get('uploader', 'Unknown')
+        self.genre = _extract_genre(data)
     
     @classmethod
     async def from_url(cls, url: str, *, loop=None, stream=True, volume=0.5):
@@ -182,7 +221,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
                 webpage_url=data.get('webpage_url', ''),
                 duration=data.get('duration', 0) or 0,
                 thumbnail=data.get('thumbnail'),
-                author=data.get('uploader', 'Unknown')
+                author=data.get('uploader', 'Unknown'),
+                genre=_extract_genre(data),
             )
         except Exception:
             return None
@@ -211,7 +251,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
                         webpage_url=entry.get('webpage_url', ''),
                         duration=entry.get('duration', 0) or 0,
                         thumbnail=entry.get('thumbnail'),
-                        author=entry.get('uploader', 'Unknown')
+                        author=entry.get('uploader', 'Unknown'),
+                        genre=_extract_genre(entry),
                     ))
             return songs
         except Exception as e:
@@ -251,7 +292,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
                     webpage_url=entry.get('webpage_url') or f"https://youtube.com/watch?v={entry.get('id', '')}",
                     duration=entry.get('duration', 0) or 0,
                     thumbnail=entry.get('thumbnail'),
-                    author=entry.get('uploader') or entry.get('channel', 'Unknown')
+                    author=entry.get('uploader') or entry.get('channel', 'Unknown'),
+                    genre=_extract_genre(entry),
                 ))
             
             logger.info(f"Extracted {len(songs)} songs from playlist (shuffled={shuffle})")
@@ -632,6 +674,12 @@ class Music(commands.Cog):
                     state.current.duration = actual_duration
                 if source.thumbnail:
                     state.current.thumbnail = source.thumbnail
+                if getattr(source, "genre", None):
+                    state.current.genre = source.genre
+                else:
+                    extracted = _extract_genre(getattr(source, "data", None))
+                    if extracted:
+                        state.current.genre = extracted
                 
                 # 5. Play
                 if state.voice_client and state.voice_client.is_connected():

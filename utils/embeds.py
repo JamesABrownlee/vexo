@@ -11,9 +11,9 @@ def _set_footer(embed: discord.Embed, state: "GuildMusicState"):
     """Helper to set footer with volume, 24/7, and autoplay status."""
     footer_parts = [f"🔊 {int(state.volume * 100)}%"]
     if state.is_24_7:
-        footer_parts.append("📻 24/7")
+        footer_parts.append("📻 24/7 \n")
     if state.is_autoplay:
-        footer_parts.append("<:di:1468760195495628861> Autoplay")
+        footer_parts.append("<:di:1468760195495628861> Autoplay \n")
     if VERSION_TYPE == "DEVELOPMENT":
         footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     embed.set_footer(text=" • ".join(footer_parts))
@@ -85,6 +85,12 @@ def create_now_playing_embed(song: "Song", state: "GuildMusicState") -> discord.
         value=loop_status,
         inline=True
     )
+
+    embed.add_field(
+        name="Genre",
+        value=getattr(song, "genre", None) or "Unknown",
+        inline=True
+    )
     
     # Thumbnail
     if song.thumbnail:
@@ -93,9 +99,9 @@ def create_now_playing_embed(song: "Song", state: "GuildMusicState") -> discord.
     # Footer with volume, 24/7, and autoplay status
     footer_parts = [f"🔊 {int(state.volume * 100)}%"]
     if state.is_24_7:
-        footer_parts.append("📻 24/7")
+        footer_parts.append("📻 24/7 \n")
     if state.is_autoplay:
-        footer_parts.append("<:di:1468760195495628861> Autoplay")
+        footer_parts.append("<:di:1468760195495628861> Autoplay \n")
     if VERSION_TYPE == "DEVELOPMENT":
         footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     
@@ -112,14 +118,14 @@ def create_queue_embed(
 ) -> discord.Embed:
     """Create a queue display embed with pagination."""
     embed = discord.Embed(
-        title="📋 Music Queue",
+        title="<:shc:1468761592329142374> Music Queue",
         color=Config.COLOR_PRIMARY
     )
     
     # Current track
     if current_song:
         embed.add_field(
-            name="▶️ Now Playing",
+            name="<:pl:1468753784523067505> Now Playing",
             value=f"**{current_song.title}** - {format_duration(current_song.duration)}",
             inline=False
         )
@@ -185,7 +191,7 @@ def create_added_to_queue_embed(song: "Song", position: int) -> discord.Embed:
 def create_error_embed(message: str) -> discord.Embed:
     """Create an error embed."""
     return discord.Embed(
-        title="❌ Error",
+        title="<:cr:1468763462942457999> Error",
         description=message,
         color=Config.COLOR_ERROR
     )
@@ -213,7 +219,7 @@ def create_idle_embed(state: "GuildMusicState", suggestion: Optional["Song"] = N
     """Create an idle/paused embed when nothing is playing."""
     embed = discord.Embed(
         title="🎵 Music Player",
-        description="⏸️ **Nothing playing**\n\nUse `/play <song>` to start listening!",
+        description="<:pa:1468742763129344184> **Nothing playing**\n\nUse `/play <song>` to start listening!",
         color=Config.COLOR_DARK
     )
     
@@ -228,17 +234,17 @@ def create_idle_embed(state: "GuildMusicState", suggestion: Optional["Song"] = N
     # Show queue info if any
     if hasattr(state, 'queue') and state.queue:
         embed.add_field(
-            name="📋 Queue",
+            name="<:shc:1468761592329142374> Queue",
             value=f"{len(state.queue)} song(s) waiting",
             inline=True
         )
     
     # Footer with status indicators
-    footer_parts = [f"🔊 {int(state.volume * 100)}%"]
+    footer_parts = [f"<:vu:1468742766639972423> {int(state.volume * 100)}%"]
     if state.is_24_7:
-        footer_parts.append("📻 24/7")
+        footer_parts.append("📻 24/7 \n")
     if state.is_autoplay:
-        footer_parts.append("<:di:1468760195495628861> Autoplay")
+        footer_parts.append("<:di:1468760195495628861> Autoplay \n")
     if VERSION_TYPE == "DEVELOPMENT":
         footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     embed.set_footer(text=" • ".join(footer_parts))

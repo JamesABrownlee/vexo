@@ -101,7 +101,7 @@ class MusicControlView(ui.View):
         else:
             await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
     
-    @ui.button(emoji="<:sk:1468742764165337280>", style=discord.ButtonStyle.primary, row=0)
+    @ui.button(emoji="<:sk:1468742764165337280>", style=discord.ButtonStyle.secondary, row=0)
     async def skip_button(self, interaction: discord.Interaction, button: ui.Button):
         """Skip to next song."""
         if not await self._check_voice(interaction):
@@ -117,7 +117,7 @@ class MusicControlView(ui.View):
         else:
             await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
     
-    @ui.button(emoji="<:st:1468742765327286426>", style=discord.ButtonStyle.danger, row=0)
+    @ui.button(emoji="<:st:1468742765327286426>", style=discord.ButtonStyle.secondary, row=0)
     async def stop_button(self, interaction: discord.Interaction, button: ui.Button):
         """Stop playback and clear session queues."""
         if not await self._check_voice(interaction):
@@ -427,8 +427,8 @@ class NowPlayingView(ui.View):
         if state.is_autoplay and state.autoplay_visible:
             upcoming = ui.Button(
                 emoji="<:shc:1468761592329142374>", 
-                label=f"Upcoming ({len(state.autoplay_visible)})",
-                style=discord.ButtonStyle.primary, 
+                label=f"({len(state.autoplay_visible)})",
+                style=discord.ButtonStyle.secondary, 
                 custom_id="upcoming", 
                 row=1
             )
