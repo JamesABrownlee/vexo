@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from cogs.music import GuildMusicState, Song
 
 from utils.discovery import discovery_engine
+from database import db
 
 
 class MusicControlView(ui.View):
@@ -668,7 +669,16 @@ class NowPlayingView(ui.View):
         state = self._get_state()
         if not state.current:
             return await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
-            
+
+        try:
+            await db.upsert_discord_user(
+                interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", None),
+                username=str(interaction.user),
+            )
+        except Exception:
+            pass
+             
         await discovery_engine.record_interaction(
             interaction.user.id, 
             state.current.author, 
@@ -683,7 +693,16 @@ class NowPlayingView(ui.View):
         state = self._get_state()
         if not state.current:
             return await interaction.response.send_message("<:cr:1468763462942457999> Nothing is playing!", ephemeral=True)
-            
+
+        try:
+            await db.upsert_discord_user(
+                interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", None),
+                username=str(interaction.user),
+            )
+        except Exception:
+            pass
+             
         await discovery_engine.record_interaction(
             interaction.user.id, 
             state.current.author, 

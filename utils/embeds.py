@@ -91,6 +91,14 @@ def create_now_playing_embed(song: "Song", state: "GuildMusicState") -> discord.
         value=getattr(song, "genre", None) or "Unknown",
         inline=True
     )
+
+    release_year = getattr(song, "release_year", None)
+    if release_year:
+        embed.add_field(
+            name="Release Year",
+            value=str(release_year),
+            inline=True
+        )
     
     # Thumbnail
     if song.thumbnail:

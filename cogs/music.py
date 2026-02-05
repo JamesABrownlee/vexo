@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 import asyncio
 import yt_dlp
 import re
+import json
 from typing import Optional, List, Set, Any, Tuple, Dict
 from dataclasses import dataclass, field
 from collections import deque
@@ -29,7 +30,13 @@ from utils.views import NowPlayingView, AutoplayPreviewView
 from database import db
 from utils.discovery import discovery_engine
 from utils.logger import set_logger
-from utils.spotify import fetch_playlist_tracks, fetch_playlist_tracks_detailed, SpotifyError
+from utils.spotify import (
+    fetch_playlist_tracks,
+    fetch_playlist_tracks_detailed,
+    search_track_enrichment,
+    get_artist_genres,
+    SpotifyError,
+)
 
 logger = set_logger(logging.getLogger('Vexo.Music'))
 
@@ -99,6 +106,7 @@ class Song:
     thumbnail: Optional[str] = None
     author: str = "Unknown"
     genre: Optional[str] = None
+    release_year: Optional[int] = None
     requested_by: Optional[int] = None
 
 
@@ -509,11 +517,45 @@ class Music(commands.Cog):
         """
         loop = self.bot.loop or asyncio.get_event_loop()
         semaphore = asyncio.Semaphore(5)
+        artist_genre_cache: Dict[str, List[str]] = {}
+
+        async def _ensure_spotify_genres(row: Dict[str, Any]):
+            if (row or {}).get("spotify_genres"):
+                return
+            artist_ids_raw = (row or {}).get("spotify_artist_ids")
+            if not artist_ids_raw:
+                return
+            try:
+                artist_ids = json.loads(artist_ids_raw) if isinstance(artist_ids_raw, str) else (artist_ids_raw or [])
+            except Exception:
+                return
+            if not artist_ids:
+                return
+            artist_id = artist_ids[0]
+            if not artist_id:
+                return
+
+            if artist_id in artist_genre_cache:
+                genres = artist_genre_cache[artist_id]
+            else:
+                try:
+                    genres = await loop.run_in_executor(None, lambda: get_artist_genres(artist_id))
+                except Exception:
+                    genres = []
+                artist_genre_cache[artist_id] = genres
+
+            if not genres:
+                return
+            genre_str = ", ".join(genres[:3])
+            await db.set_playlist_track_spotify_genres(playlist_id, row.get("source_track_id"), genre_str)
+            row["spotify_genres"] = genre_str
 
         missing: List[Tuple[int, Dict[str, Any]]] = [
             (i, row) for i, row in enumerate(chunk) if not (row or {}).get("youtube_url")
         ]
         results: List[Optional[Song]] = [None] * len(missing)
+
+        await asyncio.gather(*[_ensure_spotify_genres(r) for r in chunk])
 
         async def _match(missing_index: int, row: Dict[str, Any]):
             title = (row or {}).get("title") or ""
@@ -559,6 +601,14 @@ class Music(commands.Cog):
             title = (row or {}).get("youtube_title") or (row or {}).get("title") or "Unknown"
             author = (row or {}).get("youtube_uploader") or (row or {}).get("artists") or "Unknown"
             duration = int((row or {}).get("youtube_duration") or 0)
+            genre = (row or {}).get("spotify_genres")
+            release_year = None
+            release_date = (row or {}).get("spotify_release_date")
+            if isinstance(release_date, str) and len(release_date) >= 4 and release_date[:4].isdigit():
+                try:
+                    release_year = int(release_date[:4])
+                except Exception:
+                    release_year = None
             songs.append(
                 Song(
                     title=title,
@@ -566,6 +616,8 @@ class Music(commands.Cog):
                     webpage_url=yt_url,
                     duration=duration,
                     author=author,
+                    genre=genre,
+                    release_year=release_year,
                 )
             )
         return songs
@@ -793,6 +845,22 @@ class Music(commands.Cog):
                     extracted = _extract_genre(getattr(source, "data", None))
                     if extracted:
                         state.current.genre = extracted
+
+                # 4b. Best-effort Spotify genre enrichment (artist genres), if YouTube didn't provide one.
+                if not state.current.genre or not getattr(state.current, "release_year", None):
+                    try:
+                        enrich = await self.bot.loop.run_in_executor(
+                            None,
+                            lambda: search_track_enrichment(state.current.title, state.current.author),
+                        )
+                        genres = (enrich or {}).get("genres") or []
+                        release_year = (enrich or {}).get("release_year")
+                        if not state.current.genre and genres:
+                            state.current.genre = ", ".join(genres[:3])
+                        if not getattr(state.current, "release_year", None) and release_year:
+                            state.current.release_year = int(release_year)
+                    except Exception:
+                        pass
                 
                 # 5. Play
                 if state.voice_client and state.voice_client.is_connected():
@@ -897,6 +965,14 @@ class Music(commands.Cog):
             return
 
         await interaction.response.defer()
+        try:
+            await db.upsert_discord_user(
+                interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", None),
+                username=str(interaction.user),
+            )
+        except Exception:
+            pass
 
         source = None
         playlist_title = None
@@ -1213,6 +1289,14 @@ class Music(commands.Cog):
             return
 
         await interaction.response.defer()
+        try:
+            await db.upsert_discord_user(
+                interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", None),
+                username=str(interaction.user),
+            )
+        except Exception:
+            pass
 
         try:
             playlist_id = int(playlist)
@@ -1273,6 +1357,14 @@ class Music(commands.Cog):
             return
 
         await interaction.response.defer()
+        try:
+            await db.upsert_discord_user(
+                interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", None),
+                username=str(interaction.user),
+            )
+        except Exception:
+            pass
 
         try:
             playlist_id = int(playlist)
@@ -1377,6 +1469,14 @@ class Music(commands.Cog):
             return
         
         await interaction.response.defer()
+        try:
+            await db.upsert_discord_user(
+                interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", None),
+                username=str(interaction.user),
+            )
+        except Exception:
+            pass
         
         state = self.get_state(interaction.guild.id)
         state.voice_client = vc

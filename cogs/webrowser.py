@@ -1386,12 +1386,24 @@ class WebServer(commands.Cog):
                     if uid not in best_by_user:
                         best_by_user[uid] = dict(r)
 
+                # Prefer cached Discord display names when available.
+                user_name_by_id: dict[int, str] = {}
+                async with conn.execute("SELECT user_id, display_name, username FROM discord_users") as cur:
+                    for rr in await cur.fetchall():
+                        duid = int(rr["user_id"])
+                        dn = (rr["display_name"] or "").strip()
+                        un = (rr["username"] or "").strip()
+                        if dn:
+                            user_name_by_id[duid] = dn
+                        elif un:
+                            user_name_by_id[duid] = un
+
                 users_top_like = [
                     {
                         **entry,
                         # Return IDs as strings (Discord snowflakes overflow JS integer precision)
                         "user_id": str(uid),
-                        "user_name": self._resolve_user_name(uid),
+                        "user_name": user_name_by_id.get(uid) or self._resolve_user_name(uid),
                     }
                     for uid, entry in best_by_user.items()
                 ]
@@ -1466,8 +1478,10 @@ class WebServer(commands.Cog):
             }, status=404)
 
         user_ids: set[int] = set()
+        name_by_id: dict[int, str] = {}
         try:
             async with aiosqlite.connect(db_path) as conn:
+                conn.row_factory = aiosqlite.Row
                 async with conn.execute("SELECT DISTINCT user_id FROM user_preferences") as cur:
                     for row in await cur.fetchall():
                         if row and row[0] is not None:
@@ -1479,6 +1493,17 @@ class WebServer(commands.Cog):
                     for row in await cur.fetchall():
                         if row and row[0] is not None:
                             user_ids.add(int(row[0]))
+
+                # Fetch cached display names (best-effort)
+                async with conn.execute("SELECT user_id, display_name, username FROM discord_users") as cur:
+                    for r in await cur.fetchall():
+                        uid = int(r["user_id"])
+                        dn = (r["display_name"] or "").strip()
+                        un = (r["username"] or "").strip()
+                        if dn:
+                            name_by_id[uid] = dn
+                        elif un:
+                            name_by_id[uid] = un
         except Exception as e:
             return web.json_response({
                 "ok": False,
@@ -1487,7 +1512,7 @@ class WebServer(commands.Cog):
 
         users = [
             # Return IDs as strings (Discord snowflakes overflow JS integer precision)
-            {"user_id": str(uid), "user_name": self._resolve_user_name(uid)}
+            {"user_id": str(uid), "user_name": name_by_id.get(uid) or self._resolve_user_name(uid)}
             for uid in user_ids
         ]
 
@@ -1537,9 +1562,20 @@ class WebServer(commands.Cog):
         top_disliked = []
         top_requested = []
         preference_summary = {}
+        user_name = None
         try:
             async with aiosqlite.connect(db_path) as conn:
                 conn.row_factory = aiosqlite.Row
+
+                async with conn.execute(
+                    "SELECT display_name, username FROM discord_users WHERE user_id = ?",
+                    (user_id,),
+                ) as cur:
+                    row = await cur.fetchone()
+                    if row:
+                        dn = (row["display_name"] or "").strip()
+                        un = (row["username"] or "").strip()
+                        user_name = dn or un or None
 
                 async with conn.execute('''
                     SELECT
@@ -1590,7 +1626,7 @@ class WebServer(commands.Cog):
 
         return web.json_response({
             "ok": True,
-            "user": {"user_id": str(user_id), "user_name": self._resolve_user_name(user_id)},
+            "user": {"user_id": str(user_id), "user_name": user_name or self._resolve_user_name(user_id)},
             "preference_summary": preference_summary,
             "top_liked_tracks": top_liked,
             "top_disliked_tracks": top_disliked,

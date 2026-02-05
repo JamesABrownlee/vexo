@@ -132,8 +132,15 @@ def fetch_playlist_tracks_detailed(value: str, limit: Optional[int] = None) -> T
 
             spotify_id = (track or {}).get("id")
             title = (track or {}).get("name")
-            artists = [a.get("name") for a in (track or {}).get("artists", []) if a.get("name")]
+            artist_objs = (track or {}).get("artists", []) or []
+            artists = [a.get("name") for a in artist_objs if a.get("name")]
+            artist_ids = [a.get("id") for a in artist_objs if a.get("id")]
             artist_str = ", ".join(artists) if artists else ""
+
+            album = ((track or {}).get("album") or {}).get("name")
+            release_date = ((track or {}).get("album") or {}).get("release_date")
+            popularity = (track or {}).get("popularity")
+            duration_ms = (track or {}).get("duration_ms")
 
             if not spotify_id or not title:
                 continue
@@ -143,6 +150,11 @@ def fetch_playlist_tracks_detailed(value: str, limit: Optional[int] = None) -> T
                     "spotify_id": spotify_id,
                     "title": title,
                     "artists": artist_str,
+                    "artist_ids": artist_ids,
+                    "album": album,
+                    "release_date": release_date,
+                    "popularity": popularity,
+                    "duration_ms": duration_ms,
                     "position": position,
                 }
             )
@@ -191,3 +203,122 @@ def check_connectivity(query: str = "vexo") -> Dict[str, Any]:
     except Exception as exc:
         logger.error(f"Spotify connectivity check failed: {exc}")
         return {"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}
+
+
+def get_artist_genres(artist_id: str) -> List[str]:
+    """Return Spotify genres for an artist id (sync)."""
+    client = _get_client()
+    if not client:
+        raise SpotifyError("Spotify credentials are not configured.")
+    if not artist_id:
+        return []
+    try:
+        artist = client.artist(artist_id)
+        genres = (artist or {}).get("genres") or []
+        return [g for g in genres if isinstance(g, str) and g.strip()]
+    except SpotifyException as exc:
+        status = getattr(exc, "http_status", None)
+        msg = getattr(exc, "msg", None) or str(exc)
+        logger.error(f"Spotify artist fetch failed: {status} {msg}")
+        return []
+    except Exception as exc:
+        logger.error(f"Spotify artist fetch failed: {exc}")
+        return []
+
+
+def search_track_genres(title: str, artist: Optional[str] = None) -> List[str]:
+    """
+    Search Spotify for a track and return the primary artist's genres (sync).
+    Spotify doesn't provide per-track genres directly; artist genres are used.
+    """
+    client = _get_client()
+    if not client:
+        raise SpotifyError("Spotify credentials are not configured.")
+
+    if not title or not title.strip():
+        return []
+
+    q = f"track:{title}"
+    if artist and artist.strip():
+        q += f" artist:{artist}"
+
+    try:
+        result = client.search(q=q, type="track", limit=1)
+        items = (((result or {}).get("tracks") or {}).get("items") or [])
+        if not items:
+            return []
+        t = items[0] or {}
+        artists = t.get("artists") or []
+        artist_id = (artists[0] or {}).get("id") if artists else None
+        if not artist_id:
+            return []
+        return get_artist_genres(artist_id)
+    except SpotifyException as exc:
+        status = getattr(exc, "http_status", None)
+        msg = getattr(exc, "msg", None) or str(exc)
+        logger.error(f"Spotify search failed: {status} {msg}")
+        return []
+    except Exception as exc:
+        logger.error(f"Spotify search failed: {exc}")
+        return []
+
+
+def search_track_enrichment(title: str, artist: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Best-effort Spotify enrichment for a track search.
+
+    Returns:
+      {genres: [..], release_year: int|None, release_date: str|None, album: str|None, popularity: int|None}
+
+    Notes:
+    - Spotify doesn't provide per-track genres; this uses the primary artist's genres.
+    """
+    client = _get_client()
+    if not client:
+        raise SpotifyError("Spotify credentials are not configured.")
+
+    if not title or not title.strip():
+        return {"genres": [], "release_year": None, "release_date": None, "album": None, "popularity": None}
+
+    q = f"track:{title}"
+    if artist and artist.strip():
+        q += f" artist:{artist}"
+
+    try:
+        result = client.search(q=q, type="track", limit=1)
+        items = (((result or {}).get("tracks") or {}).get("items") or [])
+        if not items:
+            return {"genres": [], "release_year": None, "release_date": None, "album": None, "popularity": None}
+
+        t = items[0] or {}
+        album_obj = (t.get("album") or {})
+        release_date = album_obj.get("release_date")
+        album = album_obj.get("name")
+        popularity = t.get("popularity")
+
+        release_year = None
+        if isinstance(release_date, str) and len(release_date) >= 4 and release_date[:4].isdigit():
+            try:
+                release_year = int(release_date[:4])
+            except Exception:
+                release_year = None
+
+        artists = t.get("artists") or []
+        artist_id = (artists[0] or {}).get("id") if artists else None
+        genres = get_artist_genres(artist_id) if artist_id else []
+
+        return {
+            "genres": genres,
+            "release_year": release_year,
+            "release_date": release_date,
+            "album": album,
+            "popularity": popularity,
+        }
+    except SpotifyException as exc:
+        status = getattr(exc, "http_status", None)
+        msg = getattr(exc, "msg", None) or str(exc)
+        logger.error(f"Spotify search failed: {status} {msg}")
+        return {"genres": [], "release_year": None, "release_date": None, "album": None, "popularity": None}
+    except Exception as exc:
+        logger.error(f"Spotify search failed: {exc}")
+        return {"genres": [], "release_year": None, "release_date": None, "album": None, "popularity": None}

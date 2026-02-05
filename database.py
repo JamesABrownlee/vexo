@@ -149,6 +149,12 @@ class Database:
                     position INTEGER NOT NULL,
                     title TEXT,
                     artists TEXT,
+                    spotify_artist_ids TEXT,
+                    spotify_album TEXT,
+                    spotify_release_date TEXT,
+                    spotify_popularity INTEGER,
+                    spotify_duration_ms INTEGER,
+                    spotify_genres TEXT,
                     youtube_video_id TEXT,
                     youtube_url TEXT,
                     youtube_title TEXT,
@@ -166,6 +172,20 @@ class Database:
             await db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_youtube
                 ON playlist_tracks(playlist_id, youtube_video_id)
+            ''')
+
+            # 9. Discord User Cache (for web dashboard display names)
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS discord_users (
+                    user_id INTEGER PRIMARY KEY,
+                    display_name TEXT,
+                    username TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_discord_users_updated
+                ON discord_users(updated_at)
             ''')
 
             # --- Robust Migration Logic ---
@@ -240,6 +260,12 @@ class Database:
                     "position",
                     "title",
                     "artists",
+                    "spotify_artist_ids",
+                    "spotify_album",
+                    "spotify_release_date",
+                    "spotify_popularity",
+                    "spotify_duration_ms",
+                    "spotify_genres",
                     "youtube_video_id",
                     "youtube_url",
                     "youtube_title",
@@ -248,6 +274,7 @@ class Database:
                     "created_at",
                     "matched_at",
                 ],
+                "discord_users": ["user_id", "display_name", "username", "updated_at"],
             }
 
             for table, expected_cols in tables.items():
@@ -537,12 +564,37 @@ class Database:
             await db.commit()
             return cursor.rowcount > 0
 
+    # --- Discord User Cache ---
+
+    async def upsert_discord_user(self, user_id: int, display_name: Optional[str] = None, username: Optional[str] = None):
+        """Upsert a Discord user's display name / username for dashboard rendering."""
+        if not user_id:
+            return
+
+        dn = (display_name or "").strip() or None
+        un = (username or "").strip() or None
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                '''
+                INSERT INTO discord_users (user_id, display_name, username, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    display_name = COALESCE(excluded.display_name, discord_users.display_name),
+                    username = COALESCE(excluded.username, discord_users.username),
+                    updated_at = CURRENT_TIMESTAMP
+                ''',
+                (int(user_id), dn, un),
+            )
+            await db.commit()
+
     # --- Playlist Track Cache (Spotify -> YouTube matches) ---
 
     async def upsert_spotify_playlist_tracks(self, playlist_id: int, tracks: List[Dict[str, Any]]):
         """
         Upsert Spotify playlist tracks into the cache.
-        Expected track dict keys: spotify_id, title, artists, position
+        Expected track dict keys: spotify_id, title, artists, position.
+        Optional keys: artist_ids, album, release_date, popularity, duration_ms, genres
         """
         if not tracks:
             async with aiosqlite.connect(self.db_path) as db:
@@ -568,18 +620,33 @@ class Database:
                     int((t or {}).get("position") or 0),
                     (t or {}).get("title"),
                     (t or {}).get("artists"),
+                    json.dumps((t or {}).get("artist_ids") or []),
+                    (t or {}).get("album"),
+                    (t or {}).get("release_date"),
+                    (t or {}).get("popularity"),
+                    (t or {}).get("duration_ms"),
+                    (t or {}).get("genres"),
                 )
             )
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.executemany(
                 '''
-                INSERT INTO playlist_tracks (playlist_id, source, source_track_id, position, title, artists)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO playlist_tracks (
+                    playlist_id, source, source_track_id, position, title, artists,
+                    spotify_artist_ids, spotify_album, spotify_release_date, spotify_popularity, spotify_duration_ms, spotify_genres
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(playlist_id, source_track_id) DO UPDATE SET
                     position = excluded.position,
                     title = excluded.title,
-                    artists = excluded.artists
+                    artists = excluded.artists,
+                    spotify_artist_ids = excluded.spotify_artist_ids,
+                    spotify_album = excluded.spotify_album,
+                    spotify_release_date = excluded.spotify_release_date,
+                    spotify_popularity = excluded.spotify_popularity,
+                    spotify_duration_ms = excluded.spotify_duration_ms,
+                    spotify_genres = COALESCE(excluded.spotify_genres, playlist_tracks.spotify_genres)
                 ''',
                 rows,
             )
@@ -613,6 +680,19 @@ class Database:
             async with db.execute(sql, args) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(r) for r in rows]
+
+    async def set_playlist_track_spotify_genres(self, playlist_id: int, source_track_id: str, genres: str):
+        """Persist Spotify-derived genres for a cached playlist track."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                '''
+                UPDATE playlist_tracks
+                SET spotify_genres = ?
+                WHERE playlist_id = ? AND source_track_id = ?
+                ''',
+                (genres, playlist_id, source_track_id),
+            )
+            await db.commit()
 
     async def set_playlist_track_youtube_match(
         self,
