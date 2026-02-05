@@ -1897,7 +1897,16 @@ class WebServer(commands.Cog):
             for item in db_queue[:10]:
                 uid = item.get("user_id")
                 slot_type = item.get("slot_type", "discovery")
-                reason = "From liked songs" if slot_type == "liked" else "Discovery: similar artists"
+                # Use stored reason if available, otherwise fallback
+                db_reason = item.get("reason")
+                matched = item.get("matched_song")
+                if db_reason:
+                    reason = db_reason
+                elif slot_type == "liked":
+                    reason = "From their likes"
+                else:
+                    reason = "Discovery: similar artists"
+                
                 upcoming.append({
                     "title": item.get("song", "Unknown"),
                     "artist": item.get("artist", "Unknown"),
@@ -1905,6 +1914,7 @@ class WebServer(commands.Cog):
                     "source": "discovery",
                     "for_user": {"user_id": str(uid), "user_name": get_user_name(uid)} if uid else None,
                     "reason": reason,
+                    "matched_song": matched,
                 })
         except Exception as e:
             logger.warning(f"Failed to fetch session queue: {e}")
@@ -2140,8 +2150,8 @@ class WebServer(commands.Cog):
                         </div>
                         <div class="track-meta">
                             <div class="source ${t.source}">${t.source.toUpperCase()}</div>
-                            <div class="reason">${escapeHtml(t.reason)}</div>
-                            ${t.for_user ? '<div class="for-user">For: ' + escapeHtml(t.for_user.user_name) + '</div>' : ''}
+                            ${t.for_user ? '<div class="for-user">' + escapeHtml(t.for_user.user_name) + "'s slot</div>" : ''}
+                            <div class="reason">${escapeHtml(t.reason)}${t.matched_song ? " (" + escapeHtml(t.matched_song) + ")" : ""}</div>
                         </div>
                     </div>
                 `).join('');

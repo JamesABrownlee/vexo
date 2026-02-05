@@ -91,9 +91,21 @@ class Database:
                     song TEXT,
                     url TEXT,
                     position INTEGER,
+                    reason TEXT,
+                    matched_song TEXT,
                     request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
+            # Migration: add reason column if missing
+            try:
+                await db.execute('ALTER TABLE session_queue ADD COLUMN reason TEXT')
+            except Exception:
+                pass  # Column already exists
+            try:
+                await db.execute('ALTER TABLE session_queue ADD COLUMN matched_song TEXT')
+            except Exception:
+                pass  # Column already exists
             
             # Create index for faster lookups
             await db.execute('''
@@ -429,13 +441,14 @@ class Database:
             for i, item in enumerate(items):
                 await db.execute('''
                     INSERT INTO session_queue 
-                    (guild_id, queue_type, user_id, slot_type, artist, song, url, position, request_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (guild_id, queue_type, user_id, slot_type, artist, song, url, position, reason, matched_song, request_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     guild_id, queue_type, 
                     item.get('user_id'), item.get('slot_type', 'discovery'),
                     item.get('artist'), item.get('song'), item.get('url'),
-                    i, item.get('request_time')
+                    i, item.get('reason'), item.get('matched_song'),
+                    item.get('request_time')
                 ))
             await db.commit()
 

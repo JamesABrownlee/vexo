@@ -63,13 +63,16 @@ class DiscoveryEngine:
                 # Check if recently played
                 if await db.is_recently_played(guild_id, url, minutes=30):
                     continue
-                    
+                
+                song_name = pick.get('liked_song', 'Unknown')
                 slots.append({
                     'artist': pick.get('artist', 'Unknown'),
-                    'song': pick.get('liked_song', 'Unknown'),
+                    'song': song_name,
                     'url': url,
                     'user_id': user_id,
-                    'slot_type': 'liked'
+                    'slot_type': 'liked',
+                    'reason': 'From your likes',
+                    'matched_song': None
                 })
                 used_urls.add(url)
         
@@ -77,16 +80,27 @@ class DiscoveryEngine:
         discovery_needed = count - len(slots)
         if discovery_needed > 0:
             pool = await db.get_autoplay_pool(0)  # Global pool
-            liked_artists = {p.get('artist', '').lower() for p in liked_songs if p.get('artist')}
             
-            # Extract keywords from liked song titles
-            liked_keywords = set()
+            # Build artist->song map for reasoning
+            artist_to_liked = {}  # artist_lower -> liked song info
+            for p in liked_songs:
+                artist_key = p.get('artist', '').lower()
+                if artist_key and artist_key not in artist_to_liked:
+                    artist_to_liked[artist_key] = p
+            
+            liked_artists = set(artist_to_liked.keys())
+            
+            # Extract keywords from liked song titles with source tracking
+            keyword_to_liked = {}  # keyword -> liked song info
             for p in liked_songs:
                 title = p.get('liked_song', '')
                 if title:
-                    # Split into words, filter short words
                     words = [w.lower() for w in title.split() if len(w) > 3]
-                    liked_keywords.update(words)
+                    for w in words:
+                        if w not in keyword_to_liked:
+                            keyword_to_liked[w] = p
+            
+            liked_keywords = set(keyword_to_liked.keys())
             
             # Score pool tracks for discovery
             discovery_candidates = []
@@ -102,20 +116,35 @@ class DiscoveryEngine:
                 title = track.get('song', '').lower()
                 
                 score = 0
+                match_reason = None
+                matched_song = None
                 
                 # Same artist = strong match
                 if artist in liked_artists:
                     score += 5
+                    liked_info = artist_to_liked[artist]
+                    matched_song = liked_info.get('liked_song', 'Unknown')
+                    match_reason = f"Same artist as '{matched_song}'"
                 
                 # Keyword match in title
                 title_words = set(title.split())
-                keyword_matches = len(liked_keywords & title_words)
-                score += keyword_matches * 2
+                matching_keywords = liked_keywords & title_words
+                if matching_keywords:
+                    keyword_matches = len(matching_keywords)
+                    score += keyword_matches * 2
+                    if not match_reason:
+                        # Get the source song for the first matching keyword
+                        sample_kw = list(matching_keywords)[0]
+                        liked_info = keyword_to_liked[sample_kw]
+                        matched_song = liked_info.get('liked_song', 'Unknown')
+                        match_reason = f"Similar to '{matched_song}'"
                 
                 if score > 0:
                     discovery_candidates.append({
                         'track': track,
-                        'score': score
+                        'score': score,
+                        'reason': match_reason,
+                        'matched_song': matched_song
                     })
             
             # Sort by score, add randomness
@@ -128,7 +157,9 @@ class DiscoveryEngine:
                     'song': track.get('song', 'Unknown'),
                     'url': track.get('url'),
                     'user_id': user_id,
-                    'slot_type': 'discovery'
+                    'slot_type': 'discovery',
+                    'reason': item.get('reason', 'Discovery'),
+                    'matched_song': item.get('matched_song')
                 })
                 used_urls.add(track.get('url'))
         

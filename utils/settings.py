@@ -12,7 +12,7 @@ logger = logging.getLogger('MusicBot.Settings')
 
 LOGGING_LEVEL = logging.INFO
 VERSION_NUMBER = "2.08"
-BUILD_NUMBER = "48"
+BUILD_NUMBER = "49"
 VERSION_TYPE = "DEVELOPMENT"  # Options: STABLE, TESTING, DEVELOPMENT
 
 # Default settings for a guild
