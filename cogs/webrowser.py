@@ -557,9 +557,12 @@ class WebServer(commands.Cog):
 
                     const user = data.user || {};
                     const liked = Array.isArray(data.top_liked_tracks) ? data.top_liked_tracks : [];
+                    const disliked = Array.isArray(data.top_disliked_tracks) ? data.top_disliked_tracks : [];
                     const requested = Array.isArray(data.top_requested_tracks) ? data.top_requested_tracks : [];
+                    const summary = data.preference_summary || {};
 
                     let html = `<div class="muted">User: <b>${escapeHtml(user.user_name || ('User ' + String(user.user_id || userId)))}</b> (${escapeHtml(String(user.user_id || userId))})</div>`;
+                    html += `<div class="muted">Preferences: ${escapeHtml(String(summary.total ?? 0))} rows • Net: ${escapeHtml(String(summary.net_score ?? 0))} • +${escapeHtml(String(summary.positive ?? 0))} / -${escapeHtml(String(summary.negative ?? 0))}</div>`;
 
                     html += '<h3>Most Liked Tracks</h3>';
                     if (!liked.length) {
@@ -574,9 +577,22 @@ class WebServer(commands.Cog):
                         );
                     }
 
+                    html += '<h3>Most Disliked Tracks</h3>';
+                    if (!disliked.length) {
+                        html += '<div class="muted">No disliked tracks recorded yet.</div>';
+                    } else {
+                        html += tableHtml(
+                            ['Track', 'Score'],
+                            disliked.map(r => [
+                                `${escapeHtml(r.artist || 'Unknown')} - ${escapeHtml(r.song || 'Unknown')}`,
+                                escapeHtml(String(r.score ?? 0)),
+                            ])
+                        );
+                    }
+
                     html += '<h3>Most Requested Tracks</h3>';
                     if (!requested.length) {
-                        html += '<div class="muted">No request history recorded yet.</div>';
+                        html += '<div class="muted">No request play-history recorded yet. (This fills in once requested tracks are played or skipped.)</div>';
                     } else {
                         html += tableHtml(
                             ['Track', 'Plays', 'Last Played'],
@@ -1373,6 +1389,8 @@ class WebServer(commands.Cog):
                 users_top_like = [
                     {
                         **entry,
+                        # Return IDs as strings (Discord snowflakes overflow JS integer precision)
+                        "user_id": str(uid),
                         "user_name": self._resolve_user_name(uid),
                     }
                     for uid, entry in best_by_user.items()
@@ -1468,10 +1486,20 @@ class WebServer(commands.Cog):
             }, status=500)
 
         users = [
-            {"user_id": uid, "user_name": self._resolve_user_name(uid)}
+            # Return IDs as strings (Discord snowflakes overflow JS integer precision)
+            {"user_id": str(uid), "user_name": self._resolve_user_name(uid)}
             for uid in user_ids
         ]
-        users.sort(key=lambda u: ((u.get("user_name") or "").lower(), int(u.get("user_id") or 0)))
+
+        def _user_sort_key(u: dict) -> tuple:
+            name = (u.get("user_name") or "").lower()
+            try:
+                uid_val = int(u.get("user_id") or 0)
+            except (TypeError, ValueError):
+                uid_val = 0
+            return (name, uid_val)
+
+        users.sort(key=_user_sort_key)
 
         return web.json_response({
             "ok": True,
@@ -1506,10 +1534,25 @@ class WebServer(commands.Cog):
             }, status=404)
 
         top_liked = []
+        top_disliked = []
         top_requested = []
+        preference_summary = {}
         try:
             async with aiosqlite.connect(db_path) as conn:
                 conn.row_factory = aiosqlite.Row
+
+                async with conn.execute('''
+                    SELECT
+                        COUNT(*) AS total,
+                        COALESCE(SUM(score), 0) AS net_score,
+                        SUM(CASE WHEN score > 0 THEN 1 ELSE 0 END) AS positive,
+                        SUM(CASE WHEN score < 0 THEN 1 ELSE 0 END) AS negative,
+                        SUM(CASE WHEN score = 0 THEN 1 ELSE 0 END) AS zero
+                    FROM user_preferences
+                    WHERE user_id = ?
+                ''', (user_id,)) as cur:
+                    row = await cur.fetchone()
+                    preference_summary = dict(row) if row else {}
 
                 async with conn.execute('''
                     SELECT artist, liked_song AS song, url, score
@@ -1519,6 +1562,15 @@ class WebServer(commands.Cog):
                     LIMIT ?
                 ''', (user_id, limit)) as cur:
                     top_liked = [dict(r) for r in await cur.fetchall()]
+
+                async with conn.execute('''
+                    SELECT artist, liked_song AS song, url, score
+                    FROM user_preferences
+                    WHERE user_id = ? AND score < 0
+                    ORDER BY score ASC
+                    LIMIT ?
+                ''', (user_id, limit)) as cur:
+                    top_disliked = [dict(r) for r in await cur.fetchall()]
 
                 async with conn.execute('''
                     SELECT artist, song, url, COUNT(*) AS plays, MAX(timestamp) AS last_played
@@ -1538,8 +1590,10 @@ class WebServer(commands.Cog):
 
         return web.json_response({
             "ok": True,
-            "user": {"user_id": user_id, "user_name": self._resolve_user_name(user_id)},
+            "user": {"user_id": str(user_id), "user_name": self._resolve_user_name(user_id)},
+            "preference_summary": preference_summary,
             "top_liked_tracks": top_liked,
+            "top_disliked_tracks": top_disliked,
             "top_requested_tracks": top_requested,
         })
     

@@ -7,7 +7,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import asyncio
 import yt_dlp
-from typing import Optional, List, Set, Any, Tuple
+import re
+from typing import Optional, List, Set, Any, Tuple, Dict
 from dataclasses import dataclass, field
 from collections import deque
 import random
@@ -28,7 +29,7 @@ from utils.views import NowPlayingView, AutoplayPreviewView
 from database import db
 from utils.discovery import discovery_engine
 from utils.logger import set_logger
-from utils.spotify import fetch_playlist_tracks, SpotifyError
+from utils.spotify import fetch_playlist_tracks, fetch_playlist_tracks_detailed, SpotifyError
 
 logger = set_logger(logging.getLogger('Vexo.Music'))
 
@@ -131,6 +132,10 @@ class GuildMusicState:
     
     # Max duration filter (in seconds, 0 = no limit)
     max_duration: int = 0
+
+    # Spotify playlist background syncing
+    spotify_sync_task: Optional[asyncio.Task] = None
+    spotify_sync_playlist_id: Optional[int] = None
 
     @property
     def total_autoplay(self) -> List[Song]:
@@ -313,6 +318,11 @@ class Music(commands.Cog):
         app_commands.Choice(name="Global (Everyone)", value="global"),
     ]
     SPOTIFY_MATCH_LIMIT = 50
+    SPOTIFY_PLAYLIST_FETCH_LIMIT = 500
+    SPOTIFY_PLAYLIST_SYNC_BATCH = 25
+    SPOTIFY_PLAYLIST_FIRST_MATCH_WINDOW = 100
+
+    _YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\\.be/)([A-Za-z0-9_-]{11})")
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -480,6 +490,109 @@ class Music(commands.Cog):
         ])
 
         return [song for song in results if song]
+
+    def _extract_youtube_video_id(self, url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        m = self._YOUTUBE_ID_RE.search(url)
+        return m.group(1) if m else None
+
+    async def _ensure_spotify_track_chunk_matched(
+        self,
+        playlist_id: int,
+        chunk: List[Dict[str, Any]],
+    ) -> List[Song]:
+        """
+        Ensure a chunk of cached Spotify playlist tracks has YouTube matches.
+        Updates the DB for successful matches and returns playable Song objects
+        in playlist order (skipping tracks that still have no match).
+        """
+        loop = self.bot.loop or asyncio.get_event_loop()
+        semaphore = asyncio.Semaphore(5)
+
+        missing: List[Tuple[int, Dict[str, Any]]] = [
+            (i, row) for i, row in enumerate(chunk) if not (row or {}).get("youtube_url")
+        ]
+        results: List[Optional[Song]] = [None] * len(missing)
+
+        async def _match(missing_index: int, row: Dict[str, Any]):
+            title = (row or {}).get("title") or ""
+            artists = (row or {}).get("artists") or ""
+            query = f"{artists} - {title}" if artists else title
+            if not query.strip():
+                return
+            try:
+                async with semaphore:
+                    song = await YTDLSource.search(query, loop=loop)
+                if not song:
+                    return
+
+                yt_url = song.webpage_url or song.url
+                yt_id = self._extract_youtube_video_id(yt_url)
+                await db.set_playlist_track_youtube_match(
+                    playlist_id=playlist_id,
+                    source_track_id=row.get("source_track_id"),
+                    youtube_url=yt_url,
+                    youtube_video_id=yt_id,
+                    youtube_title=song.title,
+                    youtube_uploader=song.author,
+                    youtube_duration=song.duration,
+                )
+
+                # Update row in-place so we can build Songs without re-reading DB.
+                row["youtube_url"] = yt_url
+                row["youtube_video_id"] = yt_id
+                row["youtube_title"] = song.title
+                row["youtube_uploader"] = song.author
+                row["youtube_duration"] = song.duration
+                results[missing_index] = song
+            except Exception as e:
+                logger.error(f"Spotify track match failed for '{query}': {e}")
+
+        await asyncio.gather(*[_match(i, row) for i, (_, row) in enumerate(missing)])
+
+        songs: List[Song] = []
+        for row in chunk:
+            yt_url = (row or {}).get("youtube_url")
+            if not yt_url:
+                continue
+            title = (row or {}).get("youtube_title") or (row or {}).get("title") or "Unknown"
+            author = (row or {}).get("youtube_uploader") or (row or {}).get("artists") or "Unknown"
+            duration = int((row or {}).get("youtube_duration") or 0)
+            songs.append(
+                Song(
+                    title=title,
+                    url=yt_url,
+                    webpage_url=yt_url,
+                    duration=duration,
+                    author=author,
+                )
+            )
+        return songs
+
+    async def _spotify_playlist_sync_enqueue(
+        self,
+        guild_id: int,
+        playlist_id: int,
+        tracks: List[Dict[str, Any]],
+        start_index: int,
+        requested_by: int,
+    ):
+        """Background task: match Spotify playlist tracks and enqueue in-order chunks."""
+        state = self.get_state(guild_id)
+        try:
+            for idx in range(start_index, len(tracks), self.SPOTIFY_PLAYLIST_SYNC_BATCH):
+                if state.spotify_sync_playlist_id != playlist_id:
+                    return
+                chunk = tracks[idx : idx + self.SPOTIFY_PLAYLIST_SYNC_BATCH]
+                songs = await self._ensure_spotify_track_chunk_matched(playlist_id, chunk)
+                for s in songs:
+                    s.requested_by = requested_by
+                if songs:
+                    state.queue.extend(songs)
+        finally:
+            if state.spotify_sync_playlist_id == playlist_id:
+                state.spotify_sync_task = None
     
     async def ensure_voice(self, interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
         """Ensure the user is in a voice channel and bot can join."""
@@ -980,19 +1093,46 @@ class Music(commands.Cog):
             matched_count = len(songs)
         elif source == "spotify":
             try:
-                playlist_title, tracks, total = fetch_playlist_tracks(url, limit=self.SPOTIFY_MATCH_LIMIT)
+                playlist_title, detailed_tracks, total = fetch_playlist_tracks_detailed(
+                    url,
+                    limit=self.SPOTIFY_PLAYLIST_FETCH_LIMIT,
+                )
             except SpotifyError as e:
                 await interaction.followup.send(embed=create_error_embed(str(e)))
                 return
-            total_tracks = len(tracks)
-            if total_tracks == 0:
+            fetched_total = len(detailed_tracks)
+            full_total = total or fetched_total
+            total_tracks = fetched_total
+            spotify_full_total = full_total
+            if not detailed_tracks:
                 await interaction.followup.send(
                     embed=create_error_embed("No tracks found in that Spotify playlist.")
                 )
                 return
             display_name = plist.get("name") or playlist_title or display_name
-            songs = await self._match_spotify_tracks(tracks)
-            matched_count = len(songs)
+
+            # Refresh cache from Spotify and load cached rows (including any previous YouTube matches).
+            await db.upsert_spotify_playlist_tracks(playlist_id, detailed_tracks)
+            cached_tracks = await db.get_playlist_tracks(playlist_id, source="spotify")
+
+            # Cancel any previous background sync for this guild.
+            if state.spotify_sync_task and not state.spotify_sync_task.done():
+                state.spotify_sync_task.cancel()
+            state.spotify_sync_playlist_id = playlist_id
+
+            # Match & enqueue the first window inline so we can start playback quickly.
+            songs = []
+            start_index = 0
+            window_end = min(len(cached_tracks), self.SPOTIFY_PLAYLIST_FIRST_MATCH_WINDOW)
+            while start_index < window_end:
+                chunk = cached_tracks[start_index : start_index + self.SPOTIFY_PLAYLIST_SYNC_BATCH]
+                chunk_songs = await self._ensure_spotify_track_chunk_matched(playlist_id, chunk)
+                songs.extend(chunk_songs)
+                start_index += self.SPOTIFY_PLAYLIST_SYNC_BATCH
+                if songs:
+                    break
+
+            matched_count = sum(1 for t in cached_tracks if (t or {}).get("youtube_url"))
         else:
             await interaction.followup.send(
                 embed=create_error_embed("Unknown playlist source.")
@@ -1035,12 +1175,27 @@ class Music(commands.Cog):
             )
 
         if source == "spotify" and total_tracks:
+            extra = ""
+            if spotify_full_total > total_tracks:
+                extra = f" (showing first {total_tracks}/{spotify_full_total})"
             await interaction.followup.send(
                 embed=create_info_embed(
                     "Spotify Match Results",
-                    f"Matched **{matched_count}/{total_tracks}** tracks to YouTube results."
+                    f"Cached/Matched **{matched_count}/{total_tracks}** tracks so far{extra}. Continuing in the background."
                 )
             )
+
+            # Continue matching/enqueuing remaining tracks in the background, in-order.
+            if cached_tracks and start_index < len(cached_tracks):
+                state.spotify_sync_task = asyncio.create_task(
+                    self._spotify_playlist_sync_enqueue(
+                        interaction.guild.id,
+                        playlist_id,
+                        cached_tracks,
+                        start_index,
+                        interaction.user.id,
+                    )
+                )
 
         if not state.total_autoplay:
             asyncio.create_task(self._refill_autoplay_buffer(interaction.guild.id))
@@ -1096,6 +1251,88 @@ class Music(commands.Cog):
             await interaction.followup.send(
                 embed=create_info_embed("No Change", "That playlist was already removed from your personal list.")
             )
+
+    @playlist_group.command(name="sync", description="Cache Spotify playlist matches to YouTube")
+    @app_commands.describe(
+        playlist="Select a playlist to sync",
+        limit="Optional max tracks to sync (default: 200)",
+    )
+    @app_commands.autocomplete(playlist=_playlist_autocomplete)
+    async def playlist_sync(
+        self,
+        interaction: discord.Interaction,
+        playlist: str,
+        limit: Optional[int] = None,
+    ):
+        """Pre-cache Spotify playlist tracks and their YouTube matches (no playback)."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                embed=create_error_embed("This command can only be used in a server!"),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            playlist_id = int(playlist)
+        except ValueError:
+            await interaction.followup.send(embed=create_error_embed("Invalid playlist selection."))
+            return
+
+        plist = await db.get_playlist_by_id(playlist_id)
+        if not plist:
+            await interaction.followup.send(embed=create_error_embed("That playlist was not found."))
+            return
+
+        if plist.get("source") != "spotify":
+            await interaction.followup.send(embed=create_error_embed("Only Spotify playlists can be synced."))
+            return
+
+        url = plist.get("url")
+        display_name = plist.get("name") or "Spotify playlist"
+
+        try:
+            playlist_title, detailed_tracks, total = fetch_playlist_tracks_detailed(
+                url,
+                limit=self.SPOTIFY_PLAYLIST_FETCH_LIMIT,
+            )
+        except SpotifyError as e:
+            await interaction.followup.send(embed=create_error_embed(str(e)))
+            return
+
+        fetched_total = len(detailed_tracks)
+        full_total = total or fetched_total
+        total_tracks = fetched_total
+        if not detailed_tracks:
+            await interaction.followup.send(embed=create_error_embed("No tracks found in that Spotify playlist."))
+            return
+
+        display_name = plist.get("name") or playlist_title or display_name
+        await db.upsert_spotify_playlist_tracks(playlist_id, detailed_tracks)
+
+        cached_tracks = await db.get_playlist_tracks(playlist_id, source="spotify")
+        to_sync = min(len(cached_tracks), int(limit) if limit else 200)
+
+        matched_before = sum(1 for t in cached_tracks[:to_sync] if (t or {}).get("youtube_url"))
+
+        for idx in range(0, to_sync, self.SPOTIFY_PLAYLIST_SYNC_BATCH):
+            chunk = cached_tracks[idx : idx + self.SPOTIFY_PLAYLIST_SYNC_BATCH]
+            await self._ensure_spotify_track_chunk_matched(playlist_id, chunk)
+
+        cached_tracks = await db.get_playlist_tracks(playlist_id, source="spotify")
+        matched_after = sum(1 for t in cached_tracks[:to_sync] if (t or {}).get("youtube_url"))
+
+        await interaction.followup.send(
+            embed=create_info_embed(
+                "Playlist Sync Complete",
+                f"**{display_name}**\n"
+                f"Synced **{to_sync}/{total_tracks}** tracks"
+                + (f" (showing first {total_tracks}/{full_total})" if full_total > total_tracks else "")
+                + ".\n"
+                f"Matched **{matched_after}** (was {matched_before}).",
+            )
+        )
 
     @playlist_group.command(name="remove_guild", description="Remove a server playlist (Admin only)")
     @app_commands.default_permissions(administrator=True)

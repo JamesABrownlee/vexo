@@ -13,7 +13,7 @@ def _set_footer(embed: discord.Embed, state: "GuildMusicState"):
     if state.is_24_7:
         footer_parts.append("📻 24/7 \n")
     if state.is_autoplay:
-        footer_parts.append("<:di:1468760195495628861> Autoplay \n")
+        footer_parts.append("💡 Autoplay \n")
     if VERSION_TYPE == "DEVELOPMENT":
         footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     embed.set_footer(text=" • ".join(footer_parts))
@@ -101,7 +101,7 @@ def create_now_playing_embed(song: "Song", state: "GuildMusicState") -> discord.
     if state.is_24_7:
         footer_parts.append("📻 24/7 \n")
     if state.is_autoplay:
-        footer_parts.append("<:di:1468760195495628861> Autoplay \n")
+        footer_parts.append("💡 Autoplay \n")
     if VERSION_TYPE == "DEVELOPMENT":
         footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     
@@ -240,11 +240,12 @@ def create_idle_embed(state: "GuildMusicState", suggestion: Optional["Song"] = N
         )
     
     # Footer with status indicators
-    footer_parts = [f"<:vu:1468742766639972423> {int(state.volume * 100)}%"]
+    # max vaolume icon is 🔊, 24/7 is 📻, autoplay is 💡
+    footer_parts = [f"🔊 {int(state.volume * 100)}%"]
     if state.is_24_7:
         footer_parts.append("📻 24/7 \n")
     if state.is_autoplay:
-        footer_parts.append("<:di:1468760195495628861> Autoplay \n")
+        footer_parts.append("💡Autoplay \n")
     if VERSION_TYPE == "DEVELOPMENT":
         footer_parts.append(f"Vexo {VERSION_NUMBER} [{VERSION_TYPE} Build {BUILD_NUMBER}]")  
     embed.set_footer(text=" • ".join(footer_parts))

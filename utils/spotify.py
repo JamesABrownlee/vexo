@@ -93,6 +93,73 @@ def fetch_playlist_tracks(value: str, limit: Optional[int] = None) -> Tuple[str,
     return name, tracks, total
 
 
+def fetch_playlist_tracks_detailed(value: str, limit: Optional[int] = None) -> Tuple[str, List[Dict[str, Any]], int]:
+    """
+    Fetch playlist name and detailed tracks from a Spotify playlist URL or URI.
+    Returns (playlist_name, [{spotify_id, title, artists, position}, ...], total_tracks).
+
+    Notes:
+    - Local/unavailable tracks (no Spotify track id) are skipped.
+    - 'position' is the playlist order (0-based) among returned tracks.
+    """
+    client = _get_client()
+    if not client:
+        raise SpotifyError("Spotify credentials are not configured.")
+
+    playlist_id = _extract_playlist_id(value)
+    if not playlist_id:
+        raise SpotifyError("Invalid Spotify playlist URL or URI.")
+
+    try:
+        playlist = client.playlist(playlist_id)
+    except Exception as exc:
+        logger.error(f"Failed to fetch Spotify playlist: {exc}")
+        raise SpotifyError("Failed to fetch Spotify playlist.")
+
+    name = playlist.get("name") or "Spotify Playlist"
+    results = playlist.get("tracks") or {}
+    total = results.get("total") or 0
+    items = results.get("items") or []
+
+    tracks: List[Dict[str, Any]] = []
+    position = 0
+
+    while True:
+        for item in items:
+            track = (item or {}).get("track") or {}
+            if (track or {}).get("is_local"):
+                continue
+
+            spotify_id = (track or {}).get("id")
+            title = (track or {}).get("name")
+            artists = [a.get("name") for a in (track or {}).get("artists", []) if a.get("name")]
+            artist_str = ", ".join(artists) if artists else ""
+
+            if not spotify_id or not title:
+                continue
+
+            tracks.append(
+                {
+                    "spotify_id": spotify_id,
+                    "title": title,
+                    "artists": artist_str,
+                    "position": position,
+                }
+            )
+            position += 1
+
+            if limit and len(tracks) >= limit:
+                return name, tracks[:limit], total
+
+        if results.get("next"):
+            results = client.next(results)
+            items = results.get("items") or []
+        else:
+            break
+
+    return name, tracks, total
+
+
 def check_connectivity(query: str = "vexo") -> Dict[str, Any]:
     """
     Lightweight connectivity test for Spotify using client credentials.

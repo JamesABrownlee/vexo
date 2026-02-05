@@ -140,6 +140,34 @@ class Database:
                 ON playlist_hidden(user_id)
             ''')
 
+            # 8. Playlist Track Cache (Spotify -> YouTube matches)
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS playlist_tracks (
+                    playlist_id INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    source_track_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    title TEXT,
+                    artists TEXT,
+                    youtube_video_id TEXT,
+                    youtube_url TEXT,
+                    youtube_title TEXT,
+                    youtube_uploader TEXT,
+                    youtube_duration INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    matched_at TIMESTAMP,
+                    PRIMARY KEY (playlist_id, source_track_id)
+                )
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_pos
+                ON playlist_tracks(playlist_id, position)
+            ''')
+            await db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_playlist_tracks_youtube
+                ON playlist_tracks(playlist_id, youtube_video_id)
+            ''')
+
             # --- Robust Migration Logic ---
             
             # Special migration: Recreate user_preferences with proper PRIMARY KEY if needed
@@ -204,7 +232,22 @@ class Database:
                 "guild_autoplay_plist": ["guild_id", "artist", "song", "url"],
                 "current_session_plist": ["guild_id", "type", "position", "artist", "song", "url", "user_id"],
                 "guild_settings": ["guild_id", "key", "value"],
-                "playlists": ["scope", "guild_id", "user_id", "name", "genre", "source", "url", "created_at"]
+                "playlists": ["scope", "guild_id", "user_id", "name", "genre", "source", "url", "created_at"],
+                "playlist_tracks": [
+                    "playlist_id",
+                    "source",
+                    "source_track_id",
+                    "position",
+                    "title",
+                    "artists",
+                    "youtube_video_id",
+                    "youtube_url",
+                    "youtube_title",
+                    "youtube_uploader",
+                    "youtube_duration",
+                    "created_at",
+                    "matched_at",
+                ],
             }
 
             for table, expected_cols in tables.items():
@@ -493,6 +536,118 @@ class Database:
             ''', (user_id, playlist_id))
             await db.commit()
             return cursor.rowcount > 0
+
+    # --- Playlist Track Cache (Spotify -> YouTube matches) ---
+
+    async def upsert_spotify_playlist_tracks(self, playlist_id: int, tracks: List[Dict[str, Any]]):
+        """
+        Upsert Spotify playlist tracks into the cache.
+        Expected track dict keys: spotify_id, title, artists, position
+        """
+        if not tracks:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "DELETE FROM playlist_tracks WHERE playlist_id = ? AND source = 'spotify'",
+                    (playlist_id,),
+                )
+                await db.commit()
+            return
+
+        rows = []
+        keep_ids: List[str] = []
+        for t in tracks:
+            sid = (t or {}).get("spotify_id")
+            if not sid:
+                continue
+            keep_ids.append(sid)
+            rows.append(
+                (
+                    playlist_id,
+                    "spotify",
+                    sid,
+                    int((t or {}).get("position") or 0),
+                    (t or {}).get("title"),
+                    (t or {}).get("artists"),
+                )
+            )
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany(
+                '''
+                INSERT INTO playlist_tracks (playlist_id, source, source_track_id, position, title, artists)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(playlist_id, source_track_id) DO UPDATE SET
+                    position = excluded.position,
+                    title = excluded.title,
+                    artists = excluded.artists
+                ''',
+                rows,
+            )
+
+            # Remove tracks that are no longer present in the Spotify playlist.
+            # SQLite has a variable limit, but our playlist fetch is capped (see music cog).
+            if len(keep_ids) <= 900:
+                placeholders = ",".join("?" for _ in keep_ids)
+                await db.execute(
+                    f"""
+                    DELETE FROM playlist_tracks
+                    WHERE playlist_id = ?
+                      AND source = 'spotify'
+                      AND source_track_id NOT IN ({placeholders})
+                    """,
+                    [playlist_id, *keep_ids],
+                )
+
+            await db.commit()
+
+    async def get_playlist_tracks(self, playlist_id: int, source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get cached playlist tracks ordered by playlist position."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if source:
+                sql = "SELECT * FROM playlist_tracks WHERE playlist_id = ? AND source = ? ORDER BY position ASC"
+                args = (playlist_id, source)
+            else:
+                sql = "SELECT * FROM playlist_tracks WHERE playlist_id = ? ORDER BY position ASC"
+                args = (playlist_id,)
+            async with db.execute(sql, args) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+
+    async def set_playlist_track_youtube_match(
+        self,
+        playlist_id: int,
+        source_track_id: str,
+        youtube_url: str,
+        youtube_video_id: Optional[str] = None,
+        youtube_title: Optional[str] = None,
+        youtube_uploader: Optional[str] = None,
+        youtube_duration: Optional[int] = None,
+    ):
+        """Persist the YouTube match for a cached playlist track."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                '''
+                UPDATE playlist_tracks
+                SET youtube_video_id = ?,
+                    youtube_url = ?,
+                    youtube_title = ?,
+                    youtube_uploader = ?,
+                    youtube_duration = ?,
+                    matched_at = CURRENT_TIMESTAMP
+                WHERE playlist_id = ? AND source_track_id = ?
+                ''',
+                (
+                    youtube_video_id,
+                    youtube_url,
+                    youtube_title,
+                    youtube_uploader,
+                    youtube_duration,
+                    playlist_id,
+                    source_track_id,
+                ),
+            )
+            await db.commit()
 
     async def get_genre_suggestions(self, user_id: int, guild_id: int, limit: int = 25) -> List[str]:
         """Get distinct genre suggestions visible to the user."""
