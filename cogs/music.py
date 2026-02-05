@@ -418,17 +418,27 @@ class Music(commands.Cog):
                     thumbnail=None,
                     author=track['artist']
                 )
-                
+
                 # Check for duplicates in current session
                 song_key = song.webpage_url or song.url
                 if song_key and any((s.webpage_url or s.url) == song_key for s in state.queue + state.total_autoplay):
                     continue
-                
+
                 # Fill balance: first to visible until 5, then hidden
+                tier = track.get('slot_type', '?')
+                reason = track.get('reason', '?')
                 if len(state.autoplay_visible) < 5:
                     state.autoplay_visible.append(song)
+                    logger.info(
+                        f"  -> VISIBLE: '{song.title}' by {song.author} "
+                        f"[{tier}] — {reason}"
+                    )
                 else:
                     state.autoplay_hidden.append(song)
+                    logger.info(
+                        f"  -> HIDDEN:  '{song.title}' by {song.author} "
+                        f"[{tier}] — {reason}"
+                    )
             
             # 3. Fallback to playlist if discovery didn't fill the buffer
             still_needed = (5 - len(state.autoplay_visible)) + (5 - len(state.autoplay_hidden))

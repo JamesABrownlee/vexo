@@ -138,6 +138,12 @@ class DiscoveryEngine:
         adjacent_count = max(1, round(count * Config.DISCOVERY_RATIO_ADJACENT))
         wildcard_count = max(0, count - comfort_count - adjacent_count)
 
+        logger.info(
+            f"Building {count} slots for user {user_id} "
+            f"(comfort={comfort_count}, adjacent={adjacent_count}, wildcard={wildcard_count}) | "
+            f"{len(liked_songs)} liked songs in profile"
+        )
+
         # --- 4. COMFORT TIER — weighted by effective score ---
         comfort_slots = await self._pick_comfort(
             liked_songs, guild_id, user_id, comfort_count, used_urls, dedup_minutes
@@ -209,7 +215,13 @@ class DiscoveryEngine:
             url = item['track'].get('url')
             if url in used_urls:
                 continue
-            adjacent_slots.append(self._make_slot(item, user_id, 'adjacent'))
+            slot = self._make_slot(item, user_id, 'adjacent')
+            reasons_str = " + ".join(item.get('reasons_detail', []))
+            logger.info(
+                f"  [ADJACENT] '{slot['song']}' by {slot['artist']} | "
+                f"score={item['score']} | {reasons_str}"
+            )
+            adjacent_slots.append(slot)
             used_urls.add(url)
         slots.extend(adjacent_slots)
 
@@ -227,7 +239,12 @@ class DiscoveryEngine:
             # Give it a wildcard reason
             item['reason'] = "Wildcard pick — something new for you"
             item['matched_song'] = None
-            wildcard_slots.append(self._make_slot(item, user_id, 'wildcard'))
+            slot = self._make_slot(item, user_id, 'wildcard')
+            logger.info(
+                f"  [WILDCARD] '{slot['song']}' by {slot['artist']} | "
+                f"no direct match — random discovery pick"
+            )
+            wildcard_slots.append(slot)
             used_urls.add(url)
         slots.extend(wildcard_slots)
 
@@ -303,14 +320,24 @@ class DiscoveryEngine:
                     break
 
             pick = remaining.pop(pick_idx)
-            score_display = round(pick['effective_score'], 1)
+            raw_score = pick.get('score', 0)
+            decay = round(pick['effective_score'] / max(raw_score, 1), 2)
+            eff = round(pick['effective_score'], 1)
+            song_name = pick.get('liked_song', 'Unknown')
+            artist_name = pick.get('artist', 'Unknown')
+
+            logger.info(
+                f"  [COMFORT] '{song_name}' by {artist_name} | "
+                f"raw={raw_score} x decay={decay} = eff={eff}"
+            )
+
             selected.append({
-                'artist': pick.get('artist', 'Unknown'),
-                'song': pick.get('liked_song', 'Unknown'),
+                'artist': artist_name,
+                'song': song_name,
                 'url': pick.get('url'),
                 'user_id': user_id,
                 'slot_type': 'comfort',
-                'reason': f"From your likes (score {score_display})",
+                'reason': f"From your likes (score {eff})",
                 'matched_song': None
             })
 
@@ -410,6 +437,14 @@ class DiscoveryEngine:
             # Build the primary reason string
             primary_reason = reasons[0] if reasons else "Discovery"
 
+            # Log score breakdown for every candidate that scored > 0
+            if score > 0:
+                track_label = f"'{track.get('song', '?')}' by {track.get('artist', '?')}"
+                reasons_str = " + ".join(reasons)
+                logger.debug(
+                    f"  [SCORE] {track_label} => {score} pts ({reasons_str})"
+                )
+
             results.append({
                 'track': track,
                 'score': score,
@@ -482,6 +517,20 @@ class DiscoveryEngine:
         public = self._interleave_slots(public_by_user)
         hidden = self._interleave_slots(hidden_by_user)
 
+        # Log the final ordered queue with full reasoning
+        logger.info(f"=== Final Queue (Guild {guild_id}) ===")
+        for i, slot in enumerate(public):
+            logger.info(
+                f"  PUBLIC [{i+1}] '{slot['song']}' by {slot['artist']} "
+                f"[{slot['slot_type']}] — {slot.get('reason', '?')} "
+                f"(user {slot.get('user_id', '?')})"
+            )
+        for i, slot in enumerate(hidden):
+            logger.info(
+                f"  HIDDEN [{i+1}] '{slot['song']}' by {slot['artist']} "
+                f"[{slot['slot_type']}] — {slot.get('reason', '?')} "
+                f"(user {slot.get('user_id', '?')})"
+            )
         logger.info(f"Allocation complete: {len(public)} public, {len(hidden)} hidden")
         return public, hidden
 
