@@ -27,6 +27,14 @@ class Config:
     # Spotify
     SPOTIFY_CLIENT_ID: Optional[str] = os.getenv("SPOTIFY_CLIENT_ID")
     SPOTIFY_CLIENT_SECRET: Optional[str] = os.getenv("SPOTIFY_CLIENT_SECRET")
+
+    # Spotify HTTP behavior (Spotipy)
+    # Note: SPOTIFY_REQUEST_TIMEOUT can be a single float (seconds) or a "connect,read" tuple, e.g. "3,15".
+    SPOTIFY_REQUEST_TIMEOUT: str = os.getenv("SPOTIFY_REQUEST_TIMEOUT", "10")
+    SPOTIFY_RETRIES: int = int(os.getenv("SPOTIFY_RETRIES", "3"))
+    SPOTIFY_STATUS_RETRIES: int = int(os.getenv("SPOTIFY_STATUS_RETRIES", "3"))
+    SPOTIFY_BACKOFF_FACTOR: float = float(os.getenv("SPOTIFY_BACKOFF_FACTOR", "0.3"))
+    SPOTIFY_STATUS_FORCELIST: str = os.getenv("SPOTIFY_STATUS_FORCELIST", "429,500,502,503,504")
     
     # Fallback playlist for when discovery pool is empty
     FALLBACK_PLAYLIST: Optional[str] = os.getenv("FALLBACK_PLAYLIST", "https://youtube.com/playlist?list=PLwVGR49CGF7mI6S-s1bFfNgYGm2S3ev-t")

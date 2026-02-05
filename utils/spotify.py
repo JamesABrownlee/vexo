@@ -10,6 +10,12 @@ import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
 from spotipy.exceptions import SpotifyException
 
+try:
+    from requests.exceptions import Timeout as RequestsTimeout
+except Exception:  # pragma: no cover - requests may not be importable in some environments
+    class RequestsTimeout(Exception):
+        pass
+
 from config import Config
 from utils.logger import set_logger
 import logging
@@ -21,6 +27,58 @@ _spotify_client: Optional[spotipy.Spotify] = None
 
 class SpotifyError(Exception):
     """Raised when Spotify operations fail."""
+
+
+def _parse_timeout(value: Any) -> Any:
+    """
+    Parse Spotipy requests_timeout setting.
+    Accepts a float/int seconds or a "connect,read" string (seconds).
+    """
+    if value is None:
+        return 5
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return 5
+    if "," in s:
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        if len(parts) == 2:
+            try:
+                return (float(parts[0]), float(parts[1]))
+            except Exception:
+                return 5
+    try:
+        return float(s)
+    except Exception:
+        return 5
+
+
+def _parse_status_forcelist(value: Any) -> List[int]:
+    if value is None:
+        return [429, 500, 502, 503, 504]
+    if isinstance(value, (list, tuple)):
+        out: List[int] = []
+        for v in value:
+            try:
+                out.append(int(v))
+            except Exception:
+                continue
+        return out or [429, 500, 502, 503, 504]
+
+    s = str(value).strip()
+    if not s:
+        return [429, 500, 502, 503, 504]
+    out = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except Exception:
+            continue
+    return out or [429, 500, 502, 503, 504]
 
 
 def _extract_playlist_id(value: str) -> Optional[str]:
@@ -45,7 +103,25 @@ def _get_client() -> Optional[spotipy.Spotify]:
         client_id=Config.SPOTIFY_CLIENT_ID,
         client_secret=Config.SPOTIFY_CLIENT_SECRET,
     )
-    _spotify_client = spotipy.Spotify(client_credentials_manager=creds)
+
+    requests_timeout = _parse_timeout(getattr(Config, "SPOTIFY_REQUEST_TIMEOUT", 5))
+    retries = int(getattr(Config, "SPOTIFY_RETRIES", 3))
+    status_retries = int(getattr(Config, "SPOTIFY_STATUS_RETRIES", 3))
+    backoff_factor = float(getattr(Config, "SPOTIFY_BACKOFF_FACTOR", 0.3))
+    status_forcelist = _parse_status_forcelist(getattr(Config, "SPOTIFY_STATUS_FORCELIST", None))
+
+    try:
+        _spotify_client = spotipy.Spotify(
+            client_credentials_manager=creds,
+            requests_timeout=requests_timeout,
+            retries=retries,
+            status_retries=status_retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=status_forcelist,
+        )
+    except TypeError:
+        # Older spotipy versions may not support all knobs; fall back to defaults.
+        _spotify_client = spotipy.Spotify(client_credentials_manager=creds)
     return _spotify_client
 
 
@@ -200,6 +276,9 @@ def check_connectivity(query: str = "vexo") -> Dict[str, Any]:
         if status:
             return {"ok": False, "error": f"Spotify API error {status}: {msg}"}
         return {"ok": False, "error": f"Spotify API error: {msg}"}
+    except RequestsTimeout as exc:
+        logger.warning(f"Spotify connectivity check timed out: {exc}")
+        return {"ok": False, "error": "Spotify request timed out."}
     except Exception as exc:
         logger.error(f"Spotify connectivity check failed: {exc}")
         return {"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}
@@ -257,6 +336,9 @@ def search_track_genres(title: str, artist: Optional[str] = None) -> List[str]:
         status = getattr(exc, "http_status", None)
         msg = getattr(exc, "msg", None) or str(exc)
         logger.error(f"Spotify search failed: {status} {msg}")
+        return []
+    except RequestsTimeout as exc:
+        logger.warning(f"Spotify search timed out: {exc}")
         return []
     except Exception as exc:
         logger.error(f"Spotify search failed: {exc}")
@@ -318,6 +400,9 @@ def search_track_enrichment(title: str, artist: Optional[str] = None) -> Dict[st
         status = getattr(exc, "http_status", None)
         msg = getattr(exc, "msg", None) or str(exc)
         logger.error(f"Spotify search failed: {status} {msg}")
+        return {"genres": [], "release_year": None, "release_date": None, "album": None, "popularity": None}
+    except RequestsTimeout as exc:
+        logger.warning(f"Spotify search timed out: {exc}")
         return {"genres": [], "release_year": None, "release_date": None, "album": None, "popularity": None}
     except Exception as exc:
         logger.error(f"Spotify search failed: {exc}")
