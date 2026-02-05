@@ -78,6 +78,15 @@ class WebServer(commands.Cog):
         self.app.router.add_post('/settings', self.update_settings)
         self.app.router.add_get('/status', self.get_status)
         self.app.router.add_get('/spotify/test', self.spotify_test)
+        
+        # New routes for dashboard features
+        self.app.router.add_get('/upcoming', self.upcoming_view)
+        self.app.router.add_get('/pool', self.pool_view)
+        self.app.router.add_get('/api/upcoming', self.api_upcoming)
+        self.app.router.add_get('/api/global-pool', self.api_global_pool)
+        self.app.router.add_delete('/api/global-pool', self.api_delete_global_pool)
+        self.app.router.add_delete('/api/user-preference', self.api_delete_user_preference)
+        self.app.router.add_delete('/api/user-playlist', self.api_delete_user_playlist)
 
         # Simple cache to avoid hammering the Spotify API from repeated clicks/refreshes
         self._spotify_check_cache = {"at": 0.0, "result": None}
@@ -1618,6 +1627,26 @@ class WebServer(commands.Cog):
                 ''', (user_id, limit)) as cur:
                     top_requested = [dict(r) for r in await cur.fetchall()]
 
+                # Get user's saved playlists
+                async with conn.execute('''
+                    SELECT id, name, source, url, genre, created_at
+                    FROM playlists
+                    WHERE scope = 'user' AND user_id = ?
+                    ORDER BY datetime(created_at) DESC
+                    LIMIT 50
+                ''', (user_id,)) as cur:
+                    user_playlists = [dict(r) for r in await cur.fetchall()]
+
+                # Get all preference entries for full view
+                async with conn.execute('''
+                    SELECT artist, liked_song AS song, url, score
+                    FROM user_preferences
+                    WHERE user_id = ?
+                    ORDER BY score DESC
+                    LIMIT 100
+                ''', (user_id,)) as cur:
+                    all_preferences = [dict(r) for r in await cur.fetchall()]
+
         except Exception as e:
             return web.json_response({
                 "ok": False,
@@ -1631,6 +1660,8 @@ class WebServer(commands.Cog):
             "top_liked_tracks": top_liked,
             "top_disliked_tracks": top_disliked,
             "top_requested_tracks": top_requested,
+            "user_playlists": user_playlists,
+            "all_preferences": all_preferences,
         })
     
     async def stream_logs(self, request):
@@ -1753,6 +1784,556 @@ class WebServer(commands.Cog):
     async def update_settings(self, request):
         """Update settings endpoint (placeholder)."""
         return web.json_response({'status': 'not implemented'})
+
+    # --- New Dashboard Feature Handlers ---
+
+    async def api_upcoming(self, request):
+        """Get upcoming tracks with reasoning for why each was chosen."""
+        from database import db as vexo_db
+
+        music_cog = self.bot.get_cog("Music")
+        if not music_cog or not hasattr(music_cog, "guild_states"):
+            return web.json_response({"ok": False, "error": "Music cog not loaded."}, status=503)
+
+        guild_id_param = request.query.get("guild_id")
+        
+        # If no guild_id provided, find first active guild
+        guild_states = getattr(music_cog, "guild_states", {})
+        if guild_id_param:
+            try:
+                guild_id = int(guild_id_param)
+            except ValueError:
+                return web.json_response({"ok": False, "error": "Invalid guild_id."}, status=400)
+        else:
+            # Find first guild with something playing or queued
+            guild_id = None
+            for gid, st in guild_states.items():
+                if getattr(st, "current", None) or getattr(st, "queue", []):
+                    guild_id = int(gid)
+                    break
+            if not guild_id and guild_states:
+                guild_id = int(list(guild_states.keys())[0])
+
+        if not guild_id or guild_id not in guild_states:
+            return web.json_response({
+                "ok": True,
+                "guild_id": str(guild_id) if guild_id else None,
+                "current": None,
+                "upcoming": [],
+            })
+
+        state = guild_states[guild_id]
+        guild = self.bot.get_guild(guild_id)
+
+        # Fetch user names from cache
+        user_names = {}
+        try:
+            async with aiosqlite.connect(vexo_db.db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                async with conn.execute("SELECT user_id, display_name, username FROM discord_users") as cur:
+                    for r in await cur.fetchall():
+                        uid = int(r["user_id"])
+                        user_names[uid] = (r["display_name"] or "").strip() or (r["username"] or "").strip() or f"User {uid}"
+        except Exception:
+            pass
+
+        def get_user_name(uid):
+            if not uid:
+                return None
+            uid = int(uid)
+            if uid in user_names:
+                return user_names[uid]
+            # Try to resolve from Discord
+            user = self.bot.get_user(uid)
+            if user:
+                return user.display_name
+            return f"User {uid}"
+
+        # Current track
+        current = None
+        current_song = getattr(state, "current", None)
+        if current_song:
+            req_by = getattr(current_song, "requested_by", None)
+            current = {
+                "title": getattr(current_song, "title", "Unknown"),
+                "artist": getattr(current_song, "author", "Unknown"),
+                "url": getattr(current_song, "webpage_url", None) or getattr(current_song, "url", None),
+                "requested_by": get_user_name(req_by) if req_by else None,
+            }
+
+        upcoming = []
+
+        # 1. User queue (directly requested songs)
+        queue = getattr(state, "queue", []) or []
+        for song in queue[:20]:
+            req_by = getattr(song, "requested_by", None)
+            upcoming.append({
+                "title": getattr(song, "title", "Unknown"),
+                "artist": getattr(song, "author", "Unknown"),
+                "url": getattr(song, "webpage_url", None) or getattr(song, "url", None),
+                "source": "request",
+                "for_user": {"user_id": str(req_by), "user_name": get_user_name(req_by)} if req_by else None,
+                "reason": "Directly requested",
+            })
+
+        # 2. Autoplay visible (discovery-based)
+        autoplay_visible = getattr(state, "autoplay_visible", []) or []
+        for song in autoplay_visible[:10]:
+            req_by = getattr(song, "requested_by", None)
+            upcoming.append({
+                "title": getattr(song, "title", "Unknown"),
+                "artist": getattr(song, "author", "Unknown"),
+                "url": getattr(song, "webpage_url", None) or getattr(song, "url", None),
+                "source": "autoplay",
+                "for_user": {"user_id": str(req_by), "user_name": get_user_name(req_by)} if req_by else None,
+                "reason": "From autoplay buffer (discovery)",
+            })
+
+        # 3. Session queue from DB with full reasoning
+        try:
+            db_queue = await vexo_db.get_session_queue(guild_id, "public")
+            for item in db_queue[:10]:
+                uid = item.get("user_id")
+                slot_type = item.get("slot_type", "discovery")
+                reason = "From liked songs" if slot_type == "liked" else "Discovery: similar artists"
+                upcoming.append({
+                    "title": item.get("song", "Unknown"),
+                    "artist": item.get("artist", "Unknown"),
+                    "url": item.get("url"),
+                    "source": "discovery",
+                    "for_user": {"user_id": str(uid), "user_name": get_user_name(uid)} if uid else None,
+                    "reason": reason,
+                })
+        except Exception as e:
+            logger.warning(f"Failed to fetch session queue: {e}")
+
+        return web.json_response({
+            "ok": True,
+            "guild_id": str(guild_id),
+            "guild_name": guild.name if guild else None,
+            "current": current,
+            "upcoming": upcoming,
+        })
+
+    async def api_global_pool(self, request):
+        """Get the global autoplay pool with pagination."""
+        from database import db as vexo_db
+
+        try:
+            limit = int(request.query.get("limit") or "50")
+        except ValueError:
+            limit = 50
+        limit = max(10, min(limit, 200))
+
+        try:
+            offset = int(request.query.get("offset") or "0")
+        except ValueError:
+            offset = 0
+        offset = max(0, offset)
+
+        try:
+            items, total = await vexo_db.get_autoplay_pool_paginated(limit, offset)
+        except Exception as e:
+            return web.json_response({"ok": False, "error": f"Query failed: {e}"}, status=500)
+
+        return web.json_response({
+            "ok": True,
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        })
+
+    async def api_delete_global_pool(self, request):
+        """Delete an entry from the global autoplay pool."""
+        from database import db as vexo_db
+
+        url = request.query.get("url", "").strip()
+        if not url:
+            return web.json_response({"ok": False, "error": "Missing url parameter."}, status=400)
+
+        try:
+            deleted = await vexo_db.delete_from_autoplay_pool(url)
+        except Exception as e:
+            return web.json_response({"ok": False, "error": f"Delete failed: {e}"}, status=500)
+
+        if deleted:
+            logger.info(f"Deleted from global pool: {url}")
+            return web.json_response({"ok": True, "deleted": True})
+        else:
+            return web.json_response({"ok": True, "deleted": False, "message": "Entry not found."})
+
+    async def api_delete_user_preference(self, request):
+        """Delete a user's preference entry."""
+        from database import db as vexo_db
+
+        user_id_raw = request.query.get("user_id", "").strip()
+        url = request.query.get("url", "").strip()
+
+        if not user_id_raw or not url:
+            return web.json_response({"ok": False, "error": "Missing user_id or url parameter."}, status=400)
+
+        try:
+            user_id = int(user_id_raw)
+        except ValueError:
+            return web.json_response({"ok": False, "error": "Invalid user_id."}, status=400)
+
+        try:
+            deleted = await vexo_db.delete_user_preference(user_id, url)
+        except Exception as e:
+            return web.json_response({"ok": False, "error": f"Delete failed: {e}"}, status=500)
+
+        if deleted:
+            logger.info(f"Deleted user preference: user={user_id} url={url}")
+            return web.json_response({"ok": True, "deleted": True})
+        else:
+            return web.json_response({"ok": True, "deleted": False, "message": "Entry not found."})
+
+    async def api_delete_user_playlist(self, request):
+        """Delete a user's playlist."""
+        from database import db as vexo_db
+
+        user_id_raw = request.query.get("user_id", "").strip()
+        playlist_id_raw = request.query.get("playlist_id", "").strip()
+
+        if not user_id_raw or not playlist_id_raw:
+            return web.json_response({"ok": False, "error": "Missing user_id or playlist_id parameter."}, status=400)
+
+        try:
+            user_id = int(user_id_raw)
+            playlist_id = int(playlist_id_raw)
+        except ValueError:
+            return web.json_response({"ok": False, "error": "Invalid user_id or playlist_id."}, status=400)
+
+        try:
+            deleted = await vexo_db.delete_user_playlist(playlist_id, user_id)
+        except Exception as e:
+            return web.json_response({"ok": False, "error": f"Delete failed: {e}"}, status=500)
+
+        if deleted:
+            logger.info(f"Deleted user playlist: user={user_id} playlist={playlist_id}")
+            return web.json_response({"ok": True, "deleted": True})
+        else:
+            return web.json_response({"ok": True, "deleted": False, "message": "Playlist not found or not owned by user."})
+
+    async def upcoming_view(self, request):
+        """Serve the upcoming tracks page."""
+        html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vexo - Upcoming Tracks</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background: linear-gradient(135deg, #0D0D0D 0%, #1a1a2e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #00D4FF; margin-bottom: 20px; }
+        .nav { margin-bottom: 20px; }
+        .nav a { color: #00D4FF; text-decoration: none; margin-right: 15px; }
+        .nav a:hover { text-decoration: underline; }
+        .current-track {
+            background: linear-gradient(135deg, #1a1a2e, #2d2d44);
+            border: 1px solid #00D4FF;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .current-track h2 { color: #00FF88; font-size: 14px; margin-bottom: 10px; }
+        .current-track .title { font-size: 20px; font-weight: bold; }
+        .current-track .artist { color: #888; }
+        .upcoming-list { display: flex; flex-direction: column; gap: 10px; }
+        .track-item {
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .track-info { flex: 1; }
+        .track-info .title { font-weight: 600; }
+        .track-info .artist { color: #888; font-size: 14px; }
+        .track-meta { text-align: right; font-size: 12px; }
+        .track-meta .source { 
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+        }
+        .source.request { background: #00FF88; color: #000; }
+        .source.autoplay { background: #00D4FF; color: #000; }
+        .source.discovery { background: #FFaa00; color: #000; }
+        .track-meta .reason { color: #888; }
+        .track-meta .for-user { color: #00D4FF; }
+        .empty { color: #888; text-align: center; padding: 40px; }
+        .refresh-btn {
+            background: #00D4FF;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .refresh-btn:hover { background: #00a8cc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">← Dashboard</a>
+            <a href="/pool">Global Pool</a>
+            <a href="/logs/view">Logs</a>
+        </div>
+        <h1>🎵 Upcoming Tracks</h1>
+        <button class="refresh-btn" onclick="loadUpcoming()">🔄 Refresh</button>
+        <div id="current" style="margin-top: 20px;"></div>
+        <h2 style="margin: 20px 0 10px; color: #00D4FF;">Up Next</h2>
+        <div id="upcoming" class="upcoming-list"></div>
+    </div>
+    <script>
+        async function loadUpcoming() {
+            try {
+                const resp = await fetch('/api/upcoming');
+                const data = await resp.json();
+                if (!data.ok) {
+                    document.getElementById('upcoming').innerHTML = '<div class="empty">Error loading upcoming tracks</div>';
+                    return;
+                }
+                
+                // Current track
+                const currentDiv = document.getElementById('current');
+                if (data.current) {
+                    currentDiv.innerHTML = `
+                        <div class="current-track">
+                            <h2>▶️ NOW PLAYING${data.guild_name ? ' in ' + data.guild_name : ''}</h2>
+                            <div class="title">${escapeHtml(data.current.title)}</div>
+                            <div class="artist">${escapeHtml(data.current.artist)}${data.current.requested_by ? ' • Requested by ' + escapeHtml(data.current.requested_by) : ''}</div>
+                        </div>
+                    `;
+                } else {
+                    currentDiv.innerHTML = '<div class="current-track"><h2>Nothing playing</h2></div>';
+                }
+                
+                // Upcoming tracks
+                const upcomingDiv = document.getElementById('upcoming');
+                if (!data.upcoming || data.upcoming.length === 0) {
+                    upcomingDiv.innerHTML = '<div class="empty">No upcoming tracks</div>';
+                    return;
+                }
+                
+                upcomingDiv.innerHTML = data.upcoming.map((t, i) => `
+                    <div class="track-item">
+                        <div class="track-info">
+                            <div class="title">${i + 1}. ${escapeHtml(t.title)}</div>
+                            <div class="artist">${escapeHtml(t.artist)}</div>
+                        </div>
+                        <div class="track-meta">
+                            <div class="source ${t.source}">${t.source.toUpperCase()}</div>
+                            <div class="reason">${escapeHtml(t.reason)}</div>
+                            ${t.for_user ? '<div class="for-user">For: ' + escapeHtml(t.for_user.user_name) + '</div>' : ''}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                document.getElementById('upcoming').innerHTML = '<div class="empty">Failed to load: ' + e + '</div>';
+            }
+        }
+        
+        function escapeHtml(text) {
+            const s = String(text ?? '');
+            return s.replace(/[&<>"']/g, (ch) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+        }
+        
+        loadUpcoming();
+        setInterval(loadUpcoming, 10000);
+    </script>
+</body>
+</html>
+        """
+        return web.Response(text=html, content_type='text/html')
+
+    async def pool_view(self, request):
+        """Serve the global pool management page."""
+        html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vexo - Global Pool</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background: linear-gradient(135deg, #0D0D0D 0%, #1a1a2e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #00D4FF; margin-bottom: 10px; }
+        .subtitle { color: #888; margin-bottom: 20px; }
+        .nav { margin-bottom: 20px; }
+        .nav a { color: #00D4FF; text-decoration: none; margin-right: 15px; }
+        .nav a:hover { text-decoration: underline; }
+        .stats { background: rgba(0,212,255,0.1); padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .stats span { margin-right: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
+        th { background: rgba(0,212,255,0.2); color: #00D4FF; }
+        tr:hover { background: rgba(255,255,255,0.05); }
+        .delete-btn {
+            background: #FF3366;
+            color: #fff;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .delete-btn:hover { background: #cc2952; }
+        .delete-btn:disabled { background: #666; cursor: not-allowed; }
+        .pagination { margin-top: 20px; display: flex; gap: 10px; }
+        .pagination button {
+            background: #00D4FF;
+            color: #000;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .pagination button:disabled { background: #444; color: #888; cursor: not-allowed; }
+        .empty { color: #888; text-align: center; padding: 40px; }
+        .url { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .url a { color: #00D4FF; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">← Dashboard</a>
+            <a href="/upcoming">Upcoming</a>
+            <a href="/logs/view">Logs</a>
+        </div>
+        <h1>🎶 Global Discovery Pool</h1>
+        <p class="subtitle">Songs available for discovery/autoplay. Delete entries to remove from rotation.</p>
+        <div class="stats" id="stats">Loading...</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Artist</th>
+                    <th>Song</th>
+                    <th>URL</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+        <div class="pagination">
+            <button id="prevBtn" onclick="prevPage()">← Previous</button>
+            <span id="pageInfo" style="padding: 8px;">Page 1</span>
+            <button id="nextBtn" onclick="nextPage()">Next →</button>
+        </div>
+    </div>
+    <script>
+        let currentOffset = 0;
+        const limit = 50;
+        let total = 0;
+        
+        async function loadPool() {
+            try {
+                const resp = await fetch(`/api/global-pool?limit=${limit}&offset=${currentOffset}`);
+                const data = await resp.json();
+                if (!data.ok) {
+                    document.getElementById('tableBody').innerHTML = '<tr><td colspan="5" class="empty">Error loading pool</td></tr>';
+                    return;
+                }
+                
+                total = data.total;
+                document.getElementById('stats').innerHTML = `<span>Total: <strong>${total}</strong> songs</span><span>Showing: ${currentOffset + 1} - ${Math.min(currentOffset + limit, total)}</span>`;
+                
+                const tbody = document.getElementById('tableBody');
+                if (!data.items || data.items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="empty">No songs in pool</td></tr>';
+                } else {
+                    tbody.innerHTML = data.items.map((item, i) => `
+                        <tr id="row-${i}">
+                            <td>${currentOffset + i + 1}</td>
+                            <td>${escapeHtml(item.artist || 'Unknown')}</td>
+                            <td>${escapeHtml(item.song || 'Unknown')}</td>
+                            <td class="url"><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.url)}</a></td>
+                            <td><button class="delete-btn" onclick="deleteItem(${i}, '${escapeHtml(item.url).replace(/'/g, "\\'")}')">🗑️ Delete</button></td>
+                        </tr>
+                    `).join('');
+                }
+                
+                document.getElementById('prevBtn').disabled = currentOffset === 0;
+                document.getElementById('nextBtn').disabled = currentOffset + limit >= total;
+                document.getElementById('pageInfo').textContent = `Page ${Math.floor(currentOffset / limit) + 1} of ${Math.ceil(total / limit) || 1}`;
+            } catch (e) {
+                document.getElementById('tableBody').innerHTML = '<tr><td colspan="5" class="empty">Failed to load: ' + e + '</td></tr>';
+            }
+        }
+        
+        async function deleteItem(rowIndex, url) {
+            if (!confirm('Delete this song from the global pool?')) return;
+            
+            const btn = document.querySelector(`#row-${rowIndex} .delete-btn`);
+            btn.disabled = true;
+            btn.textContent = '...';
+            
+            try {
+                const resp = await fetch(`/api/global-pool?url=${encodeURIComponent(url)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (data.ok && data.deleted) {
+                    loadPool();
+                } else {
+                    alert('Failed to delete: ' + (data.message || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.textContent = '🗑️ Delete';
+                }
+            } catch (e) {
+                alert('Delete failed: ' + e);
+                btn.disabled = false;
+                btn.textContent = '🗑️ Delete';
+            }
+        }
+        
+        function prevPage() {
+            if (currentOffset >= limit) {
+                currentOffset -= limit;
+                loadPool();
+            }
+        }
+        
+        function nextPage() {
+            if (currentOffset + limit < total) {
+                currentOffset += limit;
+                loadPool();
+            }
+        }
+        
+        function escapeHtml(text) {
+            const s = String(text ?? '');
+            return s.replace(/[&<>"']/g, (ch) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+        }
+        
+        loadPool();
+    </script>
+</body>
+</html>
+        """
+        return web.Response(text=html, content_type='text/html')
     
     def cog_unload(self):
         """Clean up when cog is unloaded."""

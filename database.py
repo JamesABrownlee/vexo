@@ -749,5 +749,73 @@ class Database:
                 rows = await cursor.fetchall()
                 return [row[0] for row in rows if row and row[0]]
 
+    # --- Admin / Web Dashboard Methods ---
+
+    async def delete_user_preference(self, user_id: int, url: str) -> bool:
+        """Delete a specific user preference entry by URL."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'DELETE FROM user_preferences WHERE user_id = ? AND url = ?',
+                (user_id, url)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_all_user_preferences(self, user_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get all preferences for a user with pagination."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('''
+                SELECT * FROM user_preferences 
+                WHERE user_id = ?
+                ORDER BY score DESC
+                LIMIT ?
+            ''', (user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_user_playlists(self, user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get all playlists owned by a user (scope=user)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute('''
+                SELECT * FROM playlists
+                WHERE scope = 'user' AND user_id = ?
+                ORDER BY datetime(created_at) DESC
+                LIMIT ?
+            ''', (user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def delete_from_autoplay_pool(self, url: str) -> bool:
+        """Delete from global autoplay pool by URL."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                'DELETE FROM guild_autoplay_plist WHERE guild_id = 0 AND url = ?',
+                (url,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_autoplay_pool_paginated(self, limit: int = 50, offset: int = 0) -> tuple:
+        """Get full autoplay pool with pagination. Returns (items, total_count)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Get total count
+            async with db.execute(
+                'SELECT COUNT(*) as cnt FROM guild_autoplay_plist WHERE guild_id = 0'
+            ) as cursor:
+                row = await cursor.fetchone()
+                total = row['cnt'] if row else 0
+            # Get paginated items
+            async with db.execute('''
+                SELECT * FROM guild_autoplay_plist
+                WHERE guild_id = 0
+                ORDER BY artist ASC, song ASC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows], total
+
 # Global instance
 db = Database()
