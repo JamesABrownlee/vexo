@@ -9,6 +9,7 @@ import asyncio
 import yt_dlp
 import re
 import json
+import threading
 from typing import Optional, List, Set, Any, Tuple, Dict
 from dataclasses import dataclass, field
 from collections import deque
@@ -144,6 +145,10 @@ class GuildMusicState:
     # Spotify playlist background syncing
     spotify_sync_task: Optional[asyncio.Task] = None
     spotify_sync_playlist_id: Optional[int] = None
+
+    # Transition guard (prevents concurrent play_next/_play_song races)
+    _transition_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _transitioning: bool = False
 
     @property
     def total_autoplay(self) -> List[Song]:
@@ -692,81 +697,91 @@ class Music(commands.Cog):
     def play_next(self, guild_id: int, error=None):
         """Play the next song in the session playlist."""
         state = self.get_state(guild_id)
-        
-        if error:
-            logger.error(f"Player error in guild {guild_id}: {error}")
-        
-        # 1. Record History
-        if state.current:
-            asyncio.run_coroutine_threadsafe(
-                # Store stable URL for "recently played" checks (Song.url can be a temporary stream URL)
-                db.add_to_history(
-                    guild_id,
-                    state.current.author,
-                    state.current.title,
-                    state.current.webpage_url or state.current.url,
-                    getattr(state.current, "requested_by", None),
-                ),
-                self.bot.loop
-            )
-        
-        # 2. Check loop modes
-        if state.loop_mode == "song" and state.current:
-            self._play_song(guild_id, state.current)
-            return
-        
-        if state.loop_mode == "queue" and state.current:
-            state.queue.append(state.current)
-        
-        # 3. Get next song
-        next_song = None
-        
-        if state.queue:
-            next_song = state.queue.pop(0)
-            logger.info(f"Transition: Playing next USER REQUESTED song: '{next_song.title}'")
-        elif state.is_autoplay:
-            # Find a song that passes the duration filter
-            while state.autoplay_visible and next_song is None:
-                candidate = state.autoplay_visible.pop(0)
-                # Check duration filter (skip if duration is known and exceeds limit)
-                if state.max_duration > 0 and candidate.duration > 0 and candidate.duration > state.max_duration:
-                    logger.info(f"Autoplay: Skipping '{candidate.title}' - duration {candidate.duration}s exceeds limit {state.max_duration}s")
-                    continue
-                next_song = candidate
-                logger.info(f"Transition: Playing next AUTOPLAY song: '{next_song.title}'")
-                
-                # Rotate hidden to visible
-                if state.autoplay_hidden:
-                    hidden_to_move = state.autoplay_hidden.pop(0)
-                    state.autoplay_visible.append(hidden_to_move)
-                    logger.debug(f"Queue Rotation: Moved '{hidden_to_move.title}' from hidden to visible.")
-            
-            if next_song is None:
-                logger.info("Transition: Autoplay buffer empty (or all filtered), triggering emergency refill.")
-                async def wait_and_play():
-                    await self._refill_autoplay_buffer(guild_id)
-                    # Try to find a valid song after refill
-                    song_to_play = None
-                    while state.autoplay_visible and song_to_play is None:
-                        c = state.autoplay_visible.pop(0)
-                        if state.max_duration > 0 and c.duration > 0 and c.duration > state.max_duration:
-                            continue
-                        song_to_play = c
-                    if song_to_play:
-                        self._play_song(guild_id, song_to_play)
-                    elif not state.is_24_7 and state.voice_client:
-                        await state.voice_client.disconnect()
-                
-                asyncio.run_coroutine_threadsafe(wait_and_play(), self.bot.loop)
-                return
 
-        if next_song:
-            self._play_song(guild_id, next_song)
-        else:
-            state.current = None
-            if not state.is_24_7 and state.voice_client:
-                asyncio.run_coroutine_threadsafe(state.voice_client.disconnect(), self.bot.loop)
-                logger.info(f"Session End: Disconnected from guild {guild_id} (Queue empty and legacy autoplay off).")
+        # Serialize transitions; play_next can be invoked from multiple threads (discord voice after-callback).
+        with state._transition_lock:
+            if state._transitioning:
+                return
+            state._transitioning = True
+        
+        try:
+            if error:
+                logger.error(f"Player error in guild {guild_id}: {error}")
+            
+            # 1. Record History
+            if state.current:
+                asyncio.run_coroutine_threadsafe(
+                    # Store stable URL for "recently played" checks (Song.url can be a temporary stream URL)
+                    db.add_to_history(
+                        guild_id,
+                        state.current.author,
+                        state.current.title,
+                        state.current.webpage_url or state.current.url,
+                        getattr(state.current, "requested_by", None),
+                    ),
+                    self.bot.loop
+                )
+            
+            # 2. Check loop modes
+            if state.loop_mode == "song" and state.current:
+                self._play_song(guild_id, state.current)
+                return
+            
+            if state.loop_mode == "queue" and state.current:
+                state.queue.append(state.current)
+            
+            # 3. Get next song
+            next_song = None
+            
+            if state.queue:
+                next_song = state.queue.pop(0)
+                logger.info(f"Transition: Playing next USER REQUESTED song: '{next_song.title}'")
+            elif state.is_autoplay:
+                # Find a song that passes the duration filter
+                while state.autoplay_visible and next_song is None:
+                    candidate = state.autoplay_visible.pop(0)
+                    # Check duration filter (skip if duration is known and exceeds limit)
+                    if state.max_duration > 0 and candidate.duration > 0 and candidate.duration > state.max_duration:
+                        logger.info(f"Autoplay: Skipping '{candidate.title}' - duration {candidate.duration}s exceeds limit {state.max_duration}s")
+                        continue
+                    next_song = candidate
+                    logger.info(f"Transition: Playing next AUTOPLAY song: '{next_song.title}'")
+                    
+                    # Rotate hidden to visible
+                    if state.autoplay_hidden:
+                        hidden_to_move = state.autoplay_hidden.pop(0)
+                        state.autoplay_visible.append(hidden_to_move)
+                        logger.debug(f"Queue Rotation: Moved '{hidden_to_move.title}' from hidden to visible.")
+                
+                if next_song is None:
+                    logger.info("Transition: Autoplay buffer empty (or all filtered), triggering emergency refill.")
+                    async def wait_and_play():
+                        await self._refill_autoplay_buffer(guild_id)
+                        # Try to find a valid song after refill
+                        song_to_play = None
+                        while state.autoplay_visible and song_to_play is None:
+                            c = state.autoplay_visible.pop(0)
+                            if state.max_duration > 0 and c.duration > 0 and c.duration > state.max_duration:
+                                continue
+                            song_to_play = c
+                        if song_to_play:
+                            self._play_song(guild_id, song_to_play)
+                        elif not state.is_24_7 and state.voice_client:
+                            await state.voice_client.disconnect()
+                    
+                    asyncio.run_coroutine_threadsafe(wait_and_play(), self.bot.loop)
+                    return
+
+            if next_song:
+                self._play_song(guild_id, next_song)
+            else:
+                state.current = None
+                if not state.is_24_7 and state.voice_client:
+                    asyncio.run_coroutine_threadsafe(state.voice_client.disconnect(), self.bot.loop)
+                    logger.info(f"Session End: Disconnected from guild {guild_id} (Queue empty and legacy autoplay off).")
+        finally:
+            with state._transition_lock:
+                state._transitioning = False
     
     async def _update_now_playing_message(self, guild_id: int):
         """Delete old now playing message and post a new one with current song."""
@@ -806,6 +821,15 @@ class Music(commands.Cog):
     def _play_song(self, guild_id: int, song: Song):
         """Internal method to play a song."""
         state = self.get_state(guild_id)
+        vc = state.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            # Something is already playing; re-queue this song and let the current track finish.
+            state.queue.insert(0, song)
+            logger.warning(
+                f"Play requested while audio already playing in guild {guild_id}; re-queued '{song.title}'."
+            )
+            return
+
         state.current = song
         
         async def play_async():
@@ -864,9 +888,15 @@ class Music(commands.Cog):
                 
                 # 5. Play
                 if state.voice_client and state.voice_client.is_connected():
+                    if state.voice_client.is_playing() or state.voice_client.is_paused():
+                        state.queue.insert(0, song)
+                        logger.warning(
+                            f"Race detected: voice already playing in guild {guild_id}; re-queued '{song.title}'."
+                        )
+                        return
                     state.voice_client.play(
                         source,
-                        after=lambda e: self.play_next(guild_id, e)
+                        after=lambda e: self.bot.loop.call_soon_threadsafe(self.play_next, guild_id, e)
                     )
                     await self._update_now_playing_message(guild_id)
 
