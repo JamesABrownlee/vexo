@@ -762,6 +762,102 @@ class Database:
                 rows = await cursor.fetchall()
                 return [row[0] for row in rows if row and row[0]]
 
+    # --- Improved Discovery Methods ---
+
+    async def get_user_preferences_with_timestamps(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get all preferences for a user including the last interaction timestamp."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            # Join with playback_history to get the most recent interaction time
+            # for each song. Fall back to a synthetic old date if no history row.
+            async with conn.execute('''
+                SELECT up.*,
+                       COALESCE(
+                           (SELECT MAX(ph.timestamp)
+                            FROM playback_history ph
+                            WHERE ph.url = up.url
+                              AND ph.user_requesting = up.user_id),
+                           '2020-01-01 00:00:00'
+                       ) AS last_interaction
+                FROM user_preferences up
+                WHERE up.user_id = ?
+            ''', (user_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_collaborative_songs(self, user_id: int, guild_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Collaborative filtering: find songs liked by other users in this guild
+        who share musical taste (i.e. they also liked songs that *this* user liked).
+        Returns pool entries that the target user has NOT already scored.
+        """
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute('''
+                SELECT gap.artist, gap.song, gap.url,
+                       COUNT(DISTINCT other.user_id) AS supporter_count
+                FROM guild_autoplay_plist gap
+                -- other users who liked this pool track
+                INNER JOIN user_preferences other
+                    ON other.url = gap.url AND other.score > 0 AND other.user_id != ?
+                -- those other users must also like at least one song the target user likes
+                INNER JOIN user_preferences shared
+                    ON shared.user_id = other.user_id AND shared.score > 0
+                INNER JOIN user_preferences mine
+                    ON mine.user_id = ? AND mine.score > 0 AND mine.url = shared.url
+                WHERE gap.guild_id = 0
+                  -- exclude songs the target user already scored
+                  AND gap.url NOT IN (
+                      SELECT url FROM user_preferences WHERE user_id = ?
+                  )
+                GROUP BY gap.url
+                ORDER BY supporter_count DESC
+                LIMIT ?
+            ''', (user_id, user_id, user_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_genre_for_artist(self, artist: str) -> Optional[str]:
+        """Look up genre from cached Spotify playlist tracks for a given artist."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.execute('''
+                SELECT spotify_genres FROM playlist_tracks
+                WHERE LOWER(artists) LIKE ? AND spotify_genres IS NOT NULL AND spotify_genres != ''
+                LIMIT 1
+            ''', (f'%{artist.lower()}%',)) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else None
+
+    async def get_genres_for_artists(self, artists: List[str]) -> Dict[str, str]:
+        """Batch look up genres for multiple artists. Returns {artist_lower: genres_string}."""
+        if not artists:
+            return {}
+        result = {}
+        async with aiosqlite.connect(self.db_path) as conn:
+            for artist in artists:
+                async with conn.execute('''
+                    SELECT spotify_genres FROM playlist_tracks
+                    WHERE LOWER(artists) LIKE ? AND spotify_genres IS NOT NULL AND spotify_genres != ''
+                    LIMIT 1
+                ''', (f'%{artist.lower()}%',)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        result[artist.lower()] = row[0]
+        return result
+
+    async def get_last_played_song(self, guild_id: int) -> Optional[Dict[str, Any]]:
+        """Get the most recently played song in a guild (for momentum scoring)."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute('''
+                SELECT * FROM playback_history
+                WHERE guild_id = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ''', (guild_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
     # --- Admin / Web Dashboard Methods ---
 
     async def delete_user_preference(self, user_id: int, url: str) -> bool:

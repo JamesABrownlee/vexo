@@ -46,6 +46,36 @@ class Config:
     DISCOVERY_WEIGHT_SKIP: int = -2
     DISCOVERY_WEIGHT_REQUEST: int = 2
     DISCOVERY_INTERACTOR_INFLUENCE: float = 1.2
+
+    # --- Improved Discovery Algorithm Settings ---
+
+    # Slot distribution ratios (must sum to 1.0)
+    # Comfort: songs you already liked (weighted by score, not random)
+    # Adjacent: new songs from liked artists / matching genres (the bridge)
+    # Wildcard: surprising picks from the broader pool (the dopamine hit)
+    DISCOVERY_RATIO_COMFORT: float = float(os.getenv("DISCOVERY_RATIO_COMFORT", "0.5"))
+    DISCOVERY_RATIO_ADJACENT: float = float(os.getenv("DISCOVERY_RATIO_ADJACENT", "0.35"))
+    DISCOVERY_RATIO_WILDCARD: float = float(os.getenv("DISCOVERY_RATIO_WILDCARD", "0.15"))
+
+    # Temporal decay: halve the effective score every N days
+    # (songs liked recently matter more than songs liked months ago)
+    DISCOVERY_DECAY_HALF_LIFE_DAYS: int = int(os.getenv("DISCOVERY_DECAY_HALF_LIFE_DAYS", "14"))
+
+    # Dedup window: don't replay a song within this many minutes
+    DISCOVERY_DEDUP_MINUTES: int = int(os.getenv("DISCOVERY_DEDUP_MINUTES", "90"))
+
+    # Genre matching bonus (when a pool track shares a genre with liked songs)
+    DISCOVERY_GENRE_MATCH_SCORE: int = int(os.getenv("DISCOVERY_GENRE_MATCH_SCORE", "4"))
+
+    # Collaborative filtering bonus (when another user in the same guild liked
+    # both a song you liked AND this candidate)
+    DISCOVERY_COLLAB_SCORE: int = int(os.getenv("DISCOVERY_COLLAB_SCORE", "3"))
+
+    # Momentum bonus for matching the artist/genre of the last played song
+    DISCOVERY_MOMENTUM_SCORE: int = int(os.getenv("DISCOVERY_MOMENTUM_SCORE", "2"))
+
+    # Per-user slots count (total autoplay slots each user gets)
+    DISCOVERY_SLOTS_PER_USER: int = int(os.getenv("DISCOVERY_SLOTS_PER_USER", "4"))
     
     # Theme Colors (Vexo - Black & Neon Blue)
     COLOR_PRIMARY: int = 0x00D4FF  # Neon Blue
