@@ -4,8 +4,6 @@ Settings Cog - Server settings commands
 import logging
 
 import discord
-import aiohttp
-import socket
 from discord import app_commands
 from discord.ext import commands
 

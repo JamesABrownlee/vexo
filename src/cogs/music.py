@@ -212,7 +212,7 @@ class MusicCog(commands.Cog):
     @app_commands.describe(query="Song name or search query")
     async def play_song(self, interaction: discord.Interaction, query: str):
         """Search for a song and add it to the queue."""
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         
         # Check if user is in a voice channel
         if not interaction.user.voice:
@@ -322,7 +322,7 @@ class MusicCog(commands.Cog):
     @app_commands.describe(artist_name="Artist name")
     async def play_artist(self, interaction: discord.Interaction, artist_name: str):
         """Search for an artist, boost preference, and queue top 5 songs."""
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         
         # Check if user is in a voice channel
         if not interaction.user.voice:
@@ -445,7 +445,7 @@ class MusicCog(commands.Cog):
     async def play_any(self, interaction: discord.Interaction):
         """Start discovery playback without a specific song."""
         try:
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
         except discord.NotFound:
             # Interaction might have expired or been acknowledged already, just log and continue if possible or return
             logger.warning("Interaction expired (404) in play_any")
