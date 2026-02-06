@@ -157,6 +157,21 @@ class SettingsCog(commands.Cog):
             ephemeral=True
         )
 
+    @app_commands.command(name="restart", description="Restart the bot (Admin only)")
+    @app_commands.default_permissions(administrator=True)
+    async def restart(self, interaction: discord.Interaction):
+        """Restart the bot process."""
+        # Double check permission
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ You need Administrator permission to use this command.", ephemeral=True)
+            return
+
+        await interaction.response.send_message("🔄 Restarting bot...", ephemeral=True)
+        logger.warning(f"Bot restart requested by {interaction.user} ({interaction.user.id})")
+        
+        import sys
+        sys.exit(0)
+
 
 async def setup(bot: commands.Bot):
     """Load the settings cog."""

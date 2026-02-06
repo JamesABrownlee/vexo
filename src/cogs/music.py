@@ -50,6 +50,7 @@ class GuildPlayer:
     skip_votes: set = field(default_factory=set)
     _next_url: str | None = None  # Pre-buffered URL
     text_channel_id: int | None = None  # For Now Playing messages
+    last_np_msg: discord.Message | None = None
 
 
 class NowPlayingView(discord.ui.View):
@@ -239,6 +240,25 @@ class MusicCog(commands.Cog):
             return
         
         track = results[0]
+        
+        # Check max duration
+        if hasattr(self.bot, "db") and self.bot.db:
+            from src.database.crud import GuildCRUD
+            guild_crud = GuildCRUD(self.bot.db)
+            max_duration = await guild_crud.get_setting(interaction.guild_id, "max_song_duration")
+            
+            if max_duration and track.duration_seconds:
+                try:
+                    max_seconds = int(max_duration) * 60
+                    if max_seconds > 0 and track.duration_seconds > max_seconds:
+                        await interaction.followup.send(
+                            f"❌ Song is too long! (Limit: {max_duration} mins)",
+                            ephemeral=True
+                        )
+                        return
+                except (ValueError, TypeError):
+                    pass
+                    
         logger.info(f"Selected track: {track.title}")
         
         # Database persistence
@@ -296,7 +316,7 @@ class MusicCog(commands.Cog):
         )
         embed.set_footer(text=f"Requested by {interaction.user.display_name}")
         
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @play_group.command(name="artist", description="Play top songs by an artist and learn your preference")
     @app_commands.describe(artist_name="Artist name")
@@ -340,15 +360,29 @@ class MusicCog(commands.Cog):
         tracks_to_add = top_tracks[:5]
         
         queued_count = 0
-        from src.database.crud import SongCRUD, UserCRUD, LibraryCRUD
+        from src.database.crud import SongCRUD, UserCRUD, LibraryCRUD, GuildCRUD
         song_crud = SongCRUD(self.bot.db) if hasattr(self.bot, "db") else None
         lib_crud = LibraryCRUD(self.bot.db) if hasattr(self.bot, "db") else None
+        guild_crud = GuildCRUD(self.bot.db) if hasattr(self.bot, "db") else None
+        
+        max_seconds = 0
+        if guild_crud:
+            try:
+                max_dur = await guild_crud.get_setting(interaction.guild_id, "max_song_duration")
+                if max_dur:
+                    max_seconds = int(max_dur) * 60
+            except (ValueError, TypeError):
+                pass
         
         for track in tracks_to_add:
             # We need to find the YouTube ID for these Spotify tracks to play them
             # Use the normalizer to get the canonical YT data
             yt_track = await self.bot.normalizer.normalize_to_yt(track.title, track.artist)
             if not yt_track:
+                continue
+            
+            # Check duration
+            if max_seconds > 0 and yt_track.duration_seconds and yt_track.duration_seconds > max_seconds:
                 continue
                 
             song_db_id = None
@@ -405,7 +439,7 @@ class MusicCog(commands.Cog):
         )
         embed.set_footer(text=f"Requested by {interaction.user.display_name}")
         
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     
     @play_group.command(name="any", description="Start playing with discovery mode")
     async def play_any(self, interaction: discord.Interaction):
@@ -443,7 +477,7 @@ class MusicCog(commands.Cog):
         if not player.is_playing:
             asyncio.create_task(self._play_loop(player))
         
-        await interaction.followup.send("🎲 **Discovery mode activated!** Finding songs for you...")
+        await interaction.followup.send("🎲 **Discovery mode activated!** Finding songs for you...", ephemeral=True)
     
     @app_commands.command(name="pause", description="Pause the current song")
     async def pause(self, interaction: discord.Interaction):
@@ -452,7 +486,7 @@ class MusicCog(commands.Cog):
         
         if player.voice_client and player.voice_client.is_playing():
             player.voice_client.pause()
-            await interaction.response.send_message("⏸️ Paused")
+            await interaction.response.send_message("⏸️ Paused", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Nothing is playing", ephemeral=True)
     
@@ -463,7 +497,7 @@ class MusicCog(commands.Cog):
         
         if player.voice_client and player.voice_client.is_paused():
             player.voice_client.resume()
-            await interaction.response.send_message("▶️ Resumed")
+            await interaction.response.send_message("▶️ Resumed", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Nothing is paused", ephemeral=True)
     
@@ -477,7 +511,7 @@ class MusicCog(commands.Cog):
             return
         
         player.voice_client.stop()
-        await interaction.response.send_message("⏭️ Skipped!")
+        await interaction.response.send_message("⏭️ Skipped!", ephemeral=True)
     
     @app_commands.command(name="forceskip", description="Force skip (DJ only)")
     @app_commands.default_permissions(manage_channels=True)
@@ -487,7 +521,7 @@ class MusicCog(commands.Cog):
         
         if player.voice_client and player.is_playing:
             player.voice_client.stop()
-            await interaction.response.send_message("⏭️ Force skipped!")
+            await interaction.response.send_message("⏭️ Force skipped!", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Nothing is playing", ephemeral=True)
     
@@ -517,7 +551,7 @@ class MusicCog(commands.Cog):
                 upcoming.append(f"{i}. **{item.title}** - {item.artist}")
             embed.add_field(name="Up Next", value="\n".join(upcoming), inline=False)
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @app_commands.command(name="nowplaying", description="Show the current song")
     async def nowplaying(self, interaction: discord.Interaction):
@@ -546,7 +580,7 @@ class MusicCog(commands.Cog):
             if user:
                 embed.set_footer(text=f"Requested by {user.display_name}")
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     @app_commands.command(name="clear", description="Clear the queue (DJ only)")
     @app_commands.default_permissions(manage_channels=True)
@@ -561,7 +595,7 @@ class MusicCog(commands.Cog):
             except asyncio.QueueEmpty:
                 break
         
-        await interaction.response.send_message("🗑️ Queue cleared!")
+        await interaction.response.send_message("🗑️ Queue cleared!", ephemeral=True)
     
     @app_commands.command(name="autoplay", description="Toggle autoplay/discovery mode")
     @app_commands.describe(enabled="Enable or disable autoplay")
@@ -571,7 +605,7 @@ class MusicCog(commands.Cog):
         player.autoplay = enabled
         
         status = "enabled" if enabled else "disabled"
-        await interaction.response.send_message(f"🎲 Autoplay {status}")
+        await interaction.response.send_message(f"🎲 Autoplay {status}", ephemeral=True)
     
     # ==================== PLAYBACK LOOP ====================
     
@@ -587,7 +621,28 @@ class MusicCog(commands.Cog):
                 try:
                     if player.queue.empty():
                         if player.autoplay:
-                            item = await self._get_discovery_song(player)
+                            # Check max duration setting
+                            from src.database.crud import GuildCRUD
+                            guild_crud = GuildCRUD(self.bot.db) if hasattr(self.bot, "db") else None
+                            max_seconds = 0
+                            if guild_crud:
+                                try:
+                                    max_dur = await guild_crud.get_setting(player.guild_id, "max_song_duration")
+                                    if max_dur:
+                                        max_seconds = int(max_dur) * 60
+                                except: pass
+                            
+                            # Try up to 3 times to find a song within duration limit
+                            for _ in range(3):
+                                item = await self._get_discovery_song(player)
+                                if not item:
+                                    break
+                                
+                                if max_seconds > 0 and item.duration_seconds and item.duration_seconds > max_seconds:
+                                    logger.info(f"Skipping discovered song {item.title} (duration {item.duration_seconds}s > {max_seconds}s)")
+                                    continue
+                                break
+                            
                             if not item:
                                 logger.info(f"No discovery songs available for guild {player.guild_id}")
                                 break
@@ -889,6 +944,14 @@ class MusicCog(commands.Cog):
         channel = self.bot.get_channel(player.text_channel_id)
         if not channel:
             return
+            
+        # Delete old message
+        if player.last_np_msg:
+            try:
+                await player.last_np_msg.delete()
+            except:
+                pass
+            player.last_np_msg = None
         
         try:
             item = player.current
@@ -949,7 +1012,7 @@ class MusicCog(commands.Cog):
             # Create view with buttons
             view = NowPlayingView(self, player.guild_id)
             
-            await channel.send(embed=embed, view=view)
+            player.last_np_msg = await channel.send(embed=embed, view=view)
         except Exception as e:
             logger.debug(f"Failed to send Now Playing embed: {e}")
     

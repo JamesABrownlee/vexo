@@ -446,6 +446,10 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
     const content = document.getElementById(`tab-${tab}`);
     if (content) content.style.display = 'block';
+
+    if (tab === 'settings') {
+        loadSettingsTab();
+    }
 }
 
 async function switchScope(scope) {
@@ -488,10 +492,39 @@ async function loadSettingsTab() {
         if (title) title.textContent = '⚙️ Global Settings';
         if (globalBlock) globalBlock.style.display = 'block';
         if (serverBlock) serverBlock.style.display = 'none';
+
+        // Fetch global
+        try {
+            const res = await fetch(API.settings_global);
+            const data = await res.json();
+            const el = document.getElementById('setting-max-servers-tab');
+            if (el) el.value = data.max_concurrent_servers || '';
+        } catch (e) {
+            console.error(e);
+        }
     } else {
         if (title) title.textContent = '⚙️ Server Settings';
         if (globalBlock) globalBlock.style.display = 'none';
         if (serverBlock) serverBlock.style.display = 'block';
+
+        // Fetch server
+        try {
+            const res = await fetch(API.settings(currentScope));
+            const data = await res.json();
+
+            const pb = document.getElementById('setting-pre-buffer');
+            if (pb) pb.checked = !!data.pre_buffer;
+
+            const ba = document.getElementById('setting-buffer-amount');
+            if (ba) {
+                ba.value = data.buffer_amount || 1;
+                const val = document.getElementById('buffer-val');
+                if (val) val.textContent = ba.value;
+            }
+
+            const md = document.getElementById('setting-max-duration');
+            if (md) md.value = data.max_song_duration || 6;
+        } catch (e) { console.error(e); }
     }
 }
 
@@ -525,6 +558,51 @@ function updateNotifications(list) {
 }
 
 function toggleNotifications() {
-    const dd = document.getElementById('notif-dropdown');
     if (dd) dd.classList.toggle('show');
+}
+
+async function saveServerSettings() {
+    if (!currentGuild) return;
+
+    const preBuffer = document.getElementById('setting-pre-buffer').checked;
+    const bufferAmount = document.getElementById('setting-buffer-amount').value;
+    const maxDuration = document.getElementById('setting-max-duration').value;
+
+    try {
+        const res = await fetch(API.settings(currentGuild), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pre_buffer: preBuffer,
+                buffer_amount: parseInt(bufferAmount),
+                max_song_duration: parseInt(maxDuration)
+            })
+        });
+
+        if (res.ok) alert('Settings saved!');
+        else alert('Failed to save settings');
+    } catch (e) {
+        console.error(e);
+        alert('Error saving settings');
+    }
+}
+
+async function saveSettingsTab() {
+    const maxServers = document.getElementById('setting-max-servers-tab').value;
+
+    try {
+        const res = await fetch(API.settings_global, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                max_concurrent_servers: parseInt(maxServers)
+            })
+        });
+
+        if (res.ok) alert('Global settings saved!');
+        else alert('Failed to save global settings');
+    } catch (e) {
+        console.error(e);
+        alert('Error saving global settings');
+    }
 }

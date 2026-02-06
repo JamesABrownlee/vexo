@@ -232,6 +232,8 @@ class DashboardCog(commands.Cog):
                  await crud.set_setting(guild_id, "buffer_amount", str(data["buffer_amount"]))
             if "replay_cooldown" in data:
                  await crud.set_setting(guild_id, "replay_cooldown", str(data["replay_cooldown"]))
+            if "max_song_duration" in data:
+                 await crud.set_setting(guild_id, "max_song_duration", str(data["max_song_duration"]))
                  
             # Apply to active player if exists
             music = self.bot.get_cog("MusicCog")
