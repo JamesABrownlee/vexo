@@ -170,7 +170,16 @@ class SettingsCog(commands.Cog):
         logger.warning(f"Bot restart requested by {interaction.user} ({interaction.user.id})")
         
         import sys
-        sys.exit(0)
+        import os
+        
+        # Try clean shutdown first
+        try:
+            await self.bot.close()
+        except:
+            pass
+            
+        # Force exit
+        os._exit(0)
 
 
 async def setup(bot: commands.Bot):
