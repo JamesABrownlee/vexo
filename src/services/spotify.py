@@ -3,9 +3,8 @@ Spotify API Wrapper
 """
 import asyncio
 import logging
-import random
 from dataclasses import dataclass
-from functools import partial, wraps
+from functools import partial
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -13,29 +12,6 @@ from spotipy.oauth2 import SpotifyClientCredentials
 from src.utils.logging import get_logger, Category, Event
 
 log = get_logger(__name__)
-
-
-def retry_with_backoff(retries=3, backoff_in_seconds=1):
-    """Retry decorator with exponential backoff."""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            x = 0
-            while True:
-                try:
-                    return await func(*args, **kwargs)
-                except Exception as e:
-                    if x == retries:
-                        log.event(Category.API, "retry_exhausted", level=logging.WARNING, 
-                                  func=func.__name__, retries=retries, error=str(e))
-                        raise
-                    else:
-                        sleep = (backoff_in_seconds * 2 ** x + random.uniform(0, 1))
-                        log.debug_cat(Category.API, f"Retry {x + 1}/{retries}", func=func.__name__, sleep=f"{sleep:.2f}s")
-                        await asyncio.sleep(sleep)
-                        x += 1
-        return wrapper
-    return decorator
 
 
 @dataclass
@@ -65,18 +41,11 @@ class SpotifyService:
     """Spotify API wrapper."""
     
     def __init__(self, client_id: str, client_secret: str):
-        # Configure with longer timeout (default is 5 seconds which causes timeouts)
-        import requests
-        session = requests.Session()
-        session.request = partial(session.request, timeout=15)
-        
         self.sp = spotipy.Spotify(
             auth_manager=SpotifyClientCredentials(
                 client_id=client_id,
                 client_secret=client_secret
-            ),
-            requests_session=session,
-            requests_timeout=15
+            )
         )
     
     async def search_track(self, query: str) -> SpotifyTrack | None:

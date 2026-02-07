@@ -176,7 +176,6 @@ class YouTubeService:
             log.error_cat(Category.API, "Error getting playlist", error=str(e))
             return []
     
-    @retry_with_backoff(retries=2, backoff_in_seconds=0.5)
     async def get_stream_url(self, video_id: str) -> str | None:
         """Get the audio stream URL for a video using yt-dlp."""
         loop = asyncio.get_event_loop()
@@ -190,12 +189,7 @@ class YouTubeService:
             
             return await loop.run_in_executor(None, extract)
         except Exception as e:
-            error_msg = str(e).lower()
-            # Don't log full error for common cases
-            if "not available" in error_msg or "private" in error_msg:
-                log.warning_cat(Category.API, "Video unavailable", video_id=video_id)
-            else:
-                log.event(Category.API, Event.API_ERROR, level=logging.ERROR, service="youtube", video_id=video_id, error=str(e))
+            log.event(Category.API, Event.API_ERROR, level=logging.ERROR, service="youtube", video_id=video_id, error=str(e))
             return None
     
     @retry_with_backoff()
