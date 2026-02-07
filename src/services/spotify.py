@@ -45,7 +45,8 @@ class SpotifyService:
             auth_manager=SpotifyClientCredentials(
                 client_id=client_id,
                 client_secret=client_secret
-            )
+            ),
+            requests_timeout=15,
         )
     
     async def search_track(self, query: str) -> SpotifyTrack | None:

@@ -58,6 +58,9 @@ class YouTubeService:
     
     def __init__(self, cookies_path: str | None = None, po_token: str | None = None):
         self.yt = YTMusic()
+        # Set a longer timeout on the underlying requests session (default can be too low)
+        if hasattr(self.yt, '_session'):
+            self.yt._session.timeout = 20
         self.cookies_path = cookies_path
         self.po_token = po_token
         self._ydl_opts = {
@@ -66,6 +69,7 @@ class YouTubeService:
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
+            "socket_timeout": 20,
         }
         if cookies_path:
             self._ydl_opts["cookiefile"] = cookies_path

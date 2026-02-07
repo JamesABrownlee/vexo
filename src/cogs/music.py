@@ -876,11 +876,15 @@ class MusicCog(commands.Cog):
                     cooldown_seconds=cooldown
                 )
                 if discovered:
+                    # Map discovery engine strategy names to DB-compatible discovery_source values
+                    # The DB CHECK constraint expects 'same_artist', but the engine uses 'artist'
+                    source_map = {"artist": "same_artist"}
+                    db_source = source_map.get(discovered.strategy, discovered.strategy)
                     return QueueItem(
                         video_id=discovered.video_id,
                         title=discovered.title,
                         artist=discovered.artist,
-                        discovery_source=discovered.strategy,
+                        discovery_source=db_source,
                         discovery_reason=discovered.reason,
                         for_user_id=discovered.for_user_id,
                         duration_seconds=discovered.duration_seconds,
