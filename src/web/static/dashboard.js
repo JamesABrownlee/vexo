@@ -60,7 +60,15 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(fetchLibrary, 30000);
     setInterval(fetchNotifications, 15000);
 
-    // Tab handling
+    // Tab handling - sidebar links
+    document.querySelectorAll('.sidebar-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            switchTab(link.dataset.tab);
+        });
+    });
+
+    // Legacy .tab class support
     document.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', (e) => {
             e.preventDefault();
@@ -70,6 +78,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Log UI initialization
     initLogControls();
+
+    // Command palette initialization
+    initCommandPalette();
+
+    // Global search
+    initGlobalSearch();
+
+    // Panel search/filter initialization
+    initPanelSearches();
 });
 
 // ============================================================
@@ -608,7 +625,7 @@ async function fetchStatus() {
 
 function updateStatus(data) {
     try {
-        const dot = document.querySelector('.status-dot');
+        const dot = document.querySelector('.status-indicator');
         const text = document.getElementById('status-text');
         const guildCount = document.getElementById('stat-guilds');
         const voiceCount = document.getElementById('stat-voice');
@@ -616,15 +633,24 @@ function updateStatus(data) {
         const sidebarLatency = document.getElementById('stat-latency');
         const cpu = document.getElementById('stat-cpu');
         const ram = document.getElementById('stat-ram');
+        const cpuBar = document.getElementById('cpu-bar');
+        const ramBar = document.getElementById('ram-bar');
 
-        if (dot) dot.className = `status-dot status-${data.status === 'online' ? 'online' : 'offline'}`;
-        if (text) text.textContent = data.status === 'online' ? `Online (${data.latency_ms || 0}ms)` : 'Offline';
+        if (dot) {
+            dot.classList.toggle('online', data.status === 'online');
+            dot.classList.toggle('offline', data.status !== 'online');
+        }
+        if (text) text.textContent = data.status === 'online' ? 'Connected' : 'Offline';
         if (guildCount) guildCount.textContent = data.guilds || 0;
         if (voiceCount) voiceCount.textContent = data.voice_connections || 0;
         if (latency) latency.textContent = `${data.latency_ms || 0}ms`;
         if (sidebarLatency) sidebarLatency.textContent = `${data.latency_ms || 0}ms`;
         if (cpu) cpu.textContent = data.cpu_percent || 0;
         if (ram) ram.textContent = data.ram_percent || 0;
+
+        // Update progress bars
+        if (cpuBar) cpuBar.style.width = `${data.cpu_percent || 0}%`;
+        if (ramBar) ramBar.style.width = `${data.ram_percent || 0}%`;
     } catch (e) { console.error('Error updating status', e); }
 }
 
@@ -657,13 +683,16 @@ function updateTopBar(guilds) {
     const nav = document.getElementById('server-nav');
     if (!nav) return;
 
-    let html = `<div class="server-nav-item ${currentScope === 'global' ? 'active' : ''}" onclick="switchScope('global')">Global</div>`;
+    let html = `<button class="nav-pill ${currentScope === 'global' ? 'active' : ''}" onclick="switchScope('global')">
+        <span class="nav-pill-dot"></span>
+        Global
+    </button>`;
 
     html += guilds.map(g => `
-        <div class="server-nav-item ${currentScope === g.id ? 'active' : ''}" onclick="switchScope('${g.id}')">
+        <button class="nav-pill ${currentScope === g.id ? 'active' : ''}" onclick="switchScope('${g.id}')">
+            ${g.is_playing ? '<span class="nav-pill-dot" style="background: var(--success);"></span>' : ''}
             ${g.name || 'Server'}
-            ${g.is_playing ? ' 🔊' : ''}
-        </div>
+        </button>
     `).join('');
 
     nav.innerHTML = html;
@@ -673,16 +702,17 @@ function updateGuildList(guilds) {
     const list = document.getElementById('guild-list');
     if (!list) return;
 
+    if (!guilds || guilds.length === 0) {
+        list.innerHTML = '<div class="list-empty">No servers connected</div>';
+        return;
+    }
+
     list.innerHTML = guilds.map(g => `
-        <div class="user-item ${g.id === currentGuild ? 'active' : ''}" onclick="selectGuild(event, '${g.id}')">
-            <div class="user-avatar">${(g.name || '?').charAt(0)}</div>
-            <div class="user-info">
-                <div class="user-name">${g.name || 'Unknown Server'}</div>
-                <div class="user-stats">${g.member_count || 0} members</div>
-            </div>
-            <div class="user-actions" style="display: flex; gap: 0.5rem; align-items: center;">
-                ${g.is_playing ? '<span style="color: var(--success); font-size: 0.8rem;">▶ Playing</span>' : ''}
-                <button class="btn btn-secondary" style="padding: 0.2rem 0.5rem; font-size: 0.7rem;" onclick="event.stopPropagation(); leaveGuild('${g.id}')">Leave</button>
+        <div class="server-card ${g.id === currentGuild ? 'active' : ''}" onclick="selectGuild(event, '${g.id}')">
+            <div class="server-card-icon">${(g.name || '?').charAt(0).toUpperCase()}</div>
+            <div class="server-card-info">
+                <div class="server-card-name">${g.name || 'Unknown Server'}</div>
+                <div class="server-card-stats">${g.member_count || 0} members ${g.is_playing ? '• ▶ Playing' : ''}</div>
             </div>
         </div>
     `).join('');
@@ -710,36 +740,59 @@ function updateNowPlaying(guilds) {
 
     if (playing) {
         let durationStr = '';
+        let progressPercent = 0;
         if (playing.duration_seconds) {
             const mins = Math.floor(playing.duration_seconds / 60);
             const secs = playing.duration_seconds % 60;
             durationStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+            // Calculate progress if we have position
+            if (playing.position_seconds && playing.duration_seconds > 0) {
+                progressPercent = (playing.position_seconds / playing.duration_seconds) * 100;
+            }
         }
 
         np.innerHTML = `
-            <div class="np-content">
-                <img class="np-artwork" src="https://img.youtube.com/vi/${playing.video_id || 'dQw4w9WgXcQ'}/hqdefault.jpg" alt="Album art">
+            <div class="np-active">
+                <div class="np-artwork">
+                    <img src="https://img.youtube.com/vi/${playing.video_id || 'dQw4w9WgXcQ'}/hqdefault.jpg" alt="">
+                </div>
                 <div class="np-info">
                     <div class="np-title">${playing.current_song || 'Unknown'}</div>
                     <div class="np-artist">${playing.current_artist || 'Unknown Artist'}</div>
-                    <div class="np-metadata">
-                        ${durationStr ? `<span>⏳ ${durationStr}</span>` : ''}
-                        ${playing.genre ? `<span>🏷️ ${playing.genre}</span>` : ''}
-                        ${playing.year ? `<span>📅 ${playing.year}</span>` : ''}
+                    <div class="np-progress">
+                        <div class="np-progress-fill" style="width: ${progressPercent}%"></div>
                     </div>
-                    ${playing.discovery_reason ? `<div class="np-discovery">${playing.discovery_reason}</div>` : ''}
-                    <div class="np-controls">
-                        <button class="np-btn" onclick="control('pause')">⏸️</button>
-                        <button class="np-btn" onclick="control('skip')">⏭️</button>
-                        <button class="np-btn" onclick="control('stop')">⏹️</button>
+                    <div class="np-time">
+                        <span>${playing.position_seconds ? formatTime(playing.position_seconds) : '0:00'}</span>
+                        <span>${durationStr || '--:--'}</span>
+                    </div>
+                    <div class="np-meta">
+                        ${playing.genre ? `<span class="np-meta-item">🏷️ ${playing.genre}</span>` : ''}
+                        ${playing.discovery_reason ? `<span class="np-meta-item">✨ ${playing.discovery_reason}</span>` : ''}
                     </div>
                 </div>
             </div>
         `;
-        np.style.display = 'block';
     } else {
-        np.innerHTML = `<div class="np-content" style="justify-content: center;"><span style="color: var(--text-muted);">Nothing playing</span></div>`;
+        np.innerHTML = `
+            <div class="np-idle">
+                <div class="np-idle-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
+                    </svg>
+                </div>
+                <span class="np-idle-text">Nothing playing</span>
+                <span class="np-idle-hint">Use /play in Discord to start</span>
+            </div>
+        `;
     }
+}
+
+function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 async function fetchAnalytics() {
@@ -761,27 +814,24 @@ function updateAnalytics(data) {
         if (usersEl) usersEl.textContent = data.total_users || 0;
         if (playsEl) playsEl.textContent = data.total_plays || 0;
 
-        // Top songs
-        const songTable = document.getElementById('top-songs-table');
-        if (songTable) {
+        // Top songs (now using div-based song-list instead of table)
+        const songList = document.getElementById('top-songs-table');
+        if (songList) {
             if (!data.top_songs || data.top_songs.length === 0) {
-                songTable.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;">No songs played yet</td></tr>';
+                songList.innerHTML = '<div class="list-empty">No songs played yet</div>';
             } else {
-                songTable.innerHTML = data.top_songs.slice(0, 10).map((s, i) => `
-                    <tr>
-                        <td>${i + 1}</td>
-                        <td>
-                            <div class="song-cell">
-                                <img class="song-thumb" src="https://img.youtube.com/vi/${s.yt_id}/default.jpg" alt="">
-                                <div class="song-info">
-                                    <span class="song-name">${s.title}</span>
-                                    <span class="song-artist">${s.artist}</span>
-                                </div>
-                            </div>
-                        </td>
-                        <td>${s.plays}</td>
-                        <td>${s.likes} ❤️</td>
-                    </tr>
+                songList.innerHTML = data.top_songs.slice(0, 8).map((s, i) => `
+                    <div class="song-item">
+                        <div class="song-rank">${i + 1}</div>
+                        <div class="song-info">
+                            <div class="song-name">${s.title}</div>
+                            <div class="song-artist">${s.artist || 'Unknown'}</div>
+                        </div>
+                        <div class="song-stats">
+                            <span>${s.plays} plays</span>
+                            <span>${s.likes || 0} ❤️</span>
+                        </div>
+                    </div>
                 `).join('');
             }
         }
@@ -790,14 +840,14 @@ function updateAnalytics(data) {
         const userList = document.getElementById('top-users-list');
         if (userList) {
             if (!data.top_users || data.top_users.length === 0) {
-                userList.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 1rem;">No users active yet</div>';
+                userList.innerHTML = '<div class="list-empty">No users active yet</div>';
             } else {
-                userList.innerHTML = data.top_users.slice(0, 10).map(u => `
+                userList.innerHTML = data.top_users.slice(0, 6).map(u => `
                     <div class="user-item" onclick="viewUser('${u.id}')">
-                        <div class="user-avatar">${(u.name || '?').charAt(0)}</div>
+                        <div class="user-avatar">${(u.name || '?').charAt(0).toUpperCase()}</div>
                         <div class="user-info">
                             <div class="user-name">${u.name || 'Unknown'}</div>
-                            <div class="user-stats">${u.plays || 0} plays • ${u.total_likes || 0} likes</div>
+                            <div class="user-stat">${u.plays || 0} plays • ${u.total_likes || 0} likes</div>
                         </div>
                     </div>
                 `).join('');
@@ -820,14 +870,14 @@ function updateAnalytics(data) {
         const usefulList = document.getElementById('useful-users-list');
         if (usefulList) {
             if (!data.top_useful_users || data.top_useful_users.length === 0) {
-                usefulList.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 1rem;">No useful activity yet</div>';
+                usefulList.innerHTML = '<div class="list-empty">No useful activity yet</div>';
             } else {
-                usefulList.innerHTML = data.top_useful_users.map(u => `
+                usefulList.innerHTML = data.top_useful_users.slice(0, 5).map(u => `
                     <div class="user-item">
-                        <div class="user-avatar" style="background: var(--gradient-2)">${(u.username || '?').charAt(0)}</div>
+                        <div class="user-avatar">${(u.username || '?').charAt(0).toUpperCase()}</div>
                         <div class="user-info">
                             <div class="user-name">${u.username || 'Unknown'}</div>
-                            <div class="user-stats">${u.score || 0} helpfulness points</div>
+                            <div class="user-stat">${u.score || 0} points</div>
                         </div>
                     </div>
                 `).join('');
@@ -965,30 +1015,7 @@ function control(action) {
     }
 }
 
-function switchTab(tab) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    const tabBtn = document.querySelector(`[data-tab="${tab}"]`);
-    if (tabBtn) tabBtn.classList.add('active');
-
-    document.querySelectorAll('.tab-content').forEach(c => {
-        c.style.display = 'none';
-        c.classList.remove('active');
-    });
-    const content = document.getElementById(`tab-${tab}`);
-    if (content) {
-        content.style.display = tab === 'logs' ? 'flex' : 'block';
-        content.classList.add('active');
-    }
-
-    if (tab === 'settings') {
-        loadSettingsTab();
-    }
-
-    // Scroll logs to bottom when switching to logs tab
-    if (tab === 'logs' && logState.autoScroll) {
-        requestAnimationFrame(scrollLogsToBottom);
-    }
-}
+// switchTab function moved to end of file
 
 async function switchScope(scope) {
     currentScope = scope;
@@ -1017,6 +1044,20 @@ async function switchScope(scope) {
             fetchSongs();
             switchTab('dashboard');
         } catch (e) { console.error(e); }
+    }
+}
+
+// Updates settings panel visibility based on scope
+function updateSettingsPanel() {
+    const globalBlock = document.getElementById('settings-global');
+    const serverBlock = document.getElementById('settings-server');
+
+    if (currentScope === 'global') {
+        if (globalBlock) globalBlock.style.display = 'block';
+        if (serverBlock) serverBlock.style.display = 'none';
+    } else {
+        if (globalBlock) globalBlock.style.display = 'none';
+        if (serverBlock) serverBlock.style.display = 'block';
     }
 }
 
@@ -1094,7 +1135,7 @@ function updateNotifications(list) {
 
 function toggleNotifications() {
     const dd = document.getElementById('notif-dropdown');
-    if (dd) dd.classList.toggle('show');
+    if (dd) dd.classList.toggle('open');
 }
 
 async function saveServerSettings() {
@@ -1140,5 +1181,236 @@ async function saveSettingsTab() {
     } catch (e) {
         console.error(e);
         alert('Error saving global settings');
+    }
+}
+
+// ============================================================
+// COMMAND PALETTE
+// ============================================================
+function initCommandPalette() {
+    const modal = document.getElementById('search-modal');
+    const input = document.getElementById('cp-input');
+    const results = document.getElementById('cp-results');
+    const globalSearch = document.getElementById('global-search');
+
+    if (!modal || !input) return;
+
+    // Open command palette with Cmd/Ctrl+K
+    document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+            e.preventDefault();
+            openCommandPalette();
+        }
+        if (e.key === 'Escape' && modal.classList.contains('open')) {
+            closeCommandPalette();
+        }
+    });
+
+    // Click global search to open
+    if (globalSearch) {
+        globalSearch.addEventListener('click', openCommandPalette);
+        globalSearch.addEventListener('focus', openCommandPalette);
+    }
+
+    // Close on overlay click
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeCommandPalette();
+    });
+
+    // Handle input
+    input.addEventListener('input', () => {
+        const query = input.value.toLowerCase().trim();
+        filterCommandResults(query);
+    });
+
+    // Handle result clicks
+    if (results) {
+        results.addEventListener('click', (e) => {
+            const item = e.target.closest('.cp-item');
+            if (item) {
+                const action = item.dataset.action;
+                if (action) {
+                    switchTab(action);
+                    closeCommandPalette();
+                }
+            }
+        });
+    }
+}
+
+function openCommandPalette() {
+    const modal = document.getElementById('search-modal');
+    const input = document.getElementById('cp-input');
+    if (modal) {
+        modal.classList.add('open');
+        if (input) {
+            input.value = '';
+            input.focus();
+        }
+    }
+}
+
+function closeCommandPalette() {
+    const modal = document.getElementById('search-modal');
+    if (modal) modal.classList.remove('open');
+}
+
+function filterCommandResults(query) {
+    const results = document.getElementById('cp-results');
+    if (!results) return;
+
+    // Default quick actions
+    const actions = [
+        { action: 'dashboard', icon: '📊', label: 'Go to Dashboard' },
+        { action: 'library', icon: '📚', label: 'Open Library' },
+        { action: 'songs', icon: '🕒', label: 'View History' },
+        { action: 'users', icon: '👥', label: 'View Users' },
+        { action: 'servers', icon: '🏠', label: 'View Servers' },
+        { action: 'logs', icon: '📜', label: 'View Logs' },
+        { action: 'settings', icon: '⚙️', label: 'Open Settings' },
+    ];
+
+    const filtered = query
+        ? actions.filter(a => a.label.toLowerCase().includes(query))
+        : actions;
+
+    results.innerHTML = `
+        <div class="cp-section">
+            <div class="cp-section-title">Quick Actions</div>
+            ${filtered.map(a => `
+                <div class="cp-item" data-action="${a.action}">
+                    <span class="cp-icon">${a.icon}</span> ${a.label}
+                </div>
+            `).join('')}
+            ${filtered.length === 0 ? '<div class="cp-item" style="color: var(--text-muted);">No results found</div>' : ''}
+        </div>
+    `;
+}
+
+// ============================================================
+// GLOBAL SEARCH
+// ============================================================
+function initGlobalSearch() {
+    const searchInput = document.getElementById('global-search');
+    if (searchInput) {
+        searchInput.addEventListener('focus', openCommandPalette);
+    }
+}
+
+// ============================================================
+// PANEL SEARCHES (Library, History, Users, Servers)
+// ============================================================
+function initPanelSearches() {
+    // Library search
+    const librarySearch = document.getElementById('library-search');
+    if (librarySearch) {
+        librarySearch.addEventListener('input', debounce(() => {
+            filterTable('library-list', librarySearch.value);
+        }, 200));
+    }
+
+    // History search
+    const historySearch = document.getElementById('history-search');
+    if (historySearch) {
+        historySearch.addEventListener('input', debounce(() => {
+            filterTable('songs-list', historySearch.value);
+        }, 200));
+    }
+
+    // Users search
+    const usersSearch = document.getElementById('users-search');
+    if (usersSearch) {
+        usersSearch.addEventListener('input', debounce(() => {
+            filterGrid('users-directory', usersSearch.value);
+        }, 200));
+    }
+
+    // Servers search
+    const serversSearch = document.getElementById('servers-search');
+    if (serversSearch) {
+        serversSearch.addEventListener('input', debounce(() => {
+            filterGrid('guild-list', serversSearch.value);
+        }, 200));
+    }
+}
+
+function filterTable(tableId, query) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+
+    const rows = table.querySelectorAll('tr');
+    const q = query.toLowerCase().trim();
+
+    rows.forEach(row => {
+        if (row.querySelector('.table-empty')) return;
+        const text = row.textContent.toLowerCase();
+        row.style.display = !q || text.includes(q) ? '' : 'none';
+    });
+}
+
+function filterGrid(gridId, query) {
+    const grid = document.getElementById(gridId);
+    if (!grid) return;
+
+    const items = grid.querySelectorAll('.user-card, .server-card, .user-item');
+    const q = query.toLowerCase().trim();
+
+    items.forEach(item => {
+        const text = item.textContent.toLowerCase();
+        item.style.display = !q || text.includes(q) ? '' : 'none';
+    });
+}
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// ============================================================
+// UPDATED SWITCH TAB
+// ============================================================
+function switchTab(tabName) {
+    // Update sidebar links
+    document.querySelectorAll('.sidebar-link').forEach(link => {
+        link.classList.toggle('active', link.dataset.tab === tabName);
+    });
+
+    // Legacy .tab support
+    document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tabName);
+    });
+
+    // Show/hide panels
+    document.querySelectorAll('.tab-panel, .tab-content').forEach(panel => {
+        const panelId = panel.id.replace('tab-', '');
+        const isActive = panelId === tabName;
+        panel.classList.toggle('active', isActive);
+
+        // Handle display - logs needs flex, others block
+        if (isActive) {
+            panel.style.display = tabName === 'logs' ? 'flex' : 'block';
+        } else {
+            panel.style.display = 'none';
+        }
+    });
+
+    // Load settings if needed
+    if (tabName === 'settings') {
+        updateSettingsPanel();
+        if (typeof loadSettingsTab === 'function') {
+            loadSettingsTab();
+        }
+    }
+
+    // Scroll logs to bottom when switching to logs tab
+    if (tabName === 'logs' && logState.autoScroll) {
+        requestAnimationFrame(scrollLogsToBottom);
     }
 }
