@@ -53,6 +53,13 @@ class YTTrack:
     thumbnail_url: str | None = None
 
 
+@dataclass
+class StreamInfo:
+    """Stream URL and HTTP headers extracted by yt-dlp."""
+    url: str
+    http_headers: dict[str, str] | None = None
+
+
 class YouTubeService:
     """YouTube Music API wrapper."""
     
@@ -180,17 +187,23 @@ class YouTubeService:
             log.error_cat(Category.API, "Error getting playlist", error=str(e))
             return []
     
-    async def get_stream_url(self, video_id: str) -> str | None:
-        """Get the audio stream URL for a video using yt-dlp."""
+    async def get_stream_url(self, video_id: str) -> StreamInfo | None:
+        """Get the audio stream URL and HTTP headers for a video using yt-dlp."""
         loop = asyncio.get_event_loop()
         url = f"https://www.youtube.com/watch?v={video_id}"
-        
+
         try:
             def extract():
                 with yt_dlp.YoutubeDL(self._ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                    return info.get("url")
-            
+                    stream_url = info.get("url")
+                    if not stream_url:
+                        return None
+                    return StreamInfo(
+                        url=stream_url,
+                        http_headers=info.get("http_headers"),
+                    )
+
             return await loop.run_in_executor(None, extract)
         except Exception as e:
             log.event(Category.API, Event.API_ERROR, level=logging.ERROR, service="youtube", video_id=video_id, error=str(e))

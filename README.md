@@ -121,11 +121,11 @@ Weights are configurable per server with `/settings discovery_weights`.
 
 ## 🔒 Privacy
 
-- All data stored locally in SQLite
+- All data stored locally in SQLite 
 - Users can export or delete their data anytime
 - Opt-out stops all preference tracking
 - Web dashboard is localhost-only with no authentication
-- Skipping does NOT count as a dislike
+- Skipping does NOT count as a dislike 
 
 ## 📝 License
 

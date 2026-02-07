@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.services.youtube import YouTubeService, YTTrack
+from src.services.youtube import YouTubeService, YTTrack, StreamInfo
 from src.database.crud import SongCRUD, UserCRUD, PlaybackCRUD, ReactionCRUD, GuildCRUD
 from src.utils.logging import get_logger, Category, Event
 
@@ -170,11 +170,31 @@ class NowPlayingView(discord.ui.View):
 class MusicCog(commands.Cog):
     """Music playback commands and queue management."""
     
+    FFMPEG_BEFORE_OPTIONS = (
+        "-reconnect 1 -reconnect_streamed 1 "
+        "-reconnect_on_network_error 1 -reconnect_on_http_error 403,429,500,502,503 "
+        "-reconnect_delay_max 15 -nostdin"
+    )
     FFMPEG_OPTIONS = {
-        "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin",
+        "before_options": FFMPEG_BEFORE_OPTIONS,
         "options": "-vn",
     }
     IDLE_TIMEOUT = 300  # 5 minutes
+
+    @staticmethod
+    def _build_ffmpeg_options(stream_info: StreamInfo) -> dict:
+        """Build FFmpeg options, injecting HTTP headers from yt-dlp when available."""
+        before = MusicCog.FFMPEG_BEFORE_OPTIONS
+        if stream_info.http_headers:
+            # Pass User-Agent and Referer so YouTube's CDN recognises the client
+            ua = stream_info.http_headers.get("User-Agent")
+            referer = stream_info.http_headers.get("Referer")
+            if ua:
+                # shlex.split handles the quoting correctly
+                before = f'-user_agent "{ua}" ' + before
+            if referer:
+                before = f'-referer "{referer}" ' + before
+        return {"before_options": before, "options": "-vn"}
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -776,21 +796,22 @@ class MusicCog(commands.Cog):
                     except Exception as e:
                         log.error_cat(Category.DATABASE, "Failed to log playback start", error=str(e))
                 
-                # Get stream URL
-                url = await self.youtube.get_stream_url(item.video_id)
-                if not url:
+                # Get stream URL and HTTP headers
+                stream_info = await self.youtube.get_stream_url(item.video_id)
+                if not stream_info:
                     log.event(Category.PLAYBACK, Event.PLAYBACK_ERROR, level=logging.ERROR, video_id=item.video_id, reason="stream_url_failed")
                     continue
-                
-                item.url = url
-                
+
+                item.url = stream_info.url
+
                 # Pre-buffer next URL if enabled
                 if player.pre_buffer and not player.queue.empty():
                     asyncio.create_task(self._pre_buffer_next(player))
-                
+
                 # Play the audio
                 try:
-                    source = await discord.FFmpegOpusAudio.from_probe(url, **self.FFMPEG_OPTIONS)
+                    ffmpeg_opts = self._build_ffmpeg_options(stream_info)
+                    source = await discord.FFmpegOpusAudio.from_probe(stream_info.url, **ffmpeg_opts)
                     
                     play_complete = asyncio.Event()
                     
@@ -1036,13 +1057,13 @@ class MusicCog(commands.Cog):
             # Peek at next item without removing
             if player.queue.empty():
                 return
-            
+
             next_item = list(player.queue._queue)[0]
             if not next_item.url:
-                url = await self.youtube.get_stream_url(next_item.video_id)
-                if url:
-                    next_item.url = url
-                    player._next_url = url
+                stream_info = await self.youtube.get_stream_url(next_item.video_id)
+                if stream_info:
+                    next_item.url = stream_info.url
+                    player._next_url = stream_info.url
                     log.debug_cat(Category.QUEUE, "Pre-buffered URL", title=next_item.title)
         except Exception as e:
             log.debug_cat(Category.QUEUE, "Pre-buffer failed", error=str(e))
