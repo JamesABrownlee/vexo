@@ -13,6 +13,7 @@ const API = {
     notifications: '/api/notifications',
     settings_global: '/api/settings/global',
     leave_guild: (id) => `/api/guilds/${id}/leave`,
+    genres: '/api/genres',
 };
 
 // State
@@ -52,6 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchLibrary();
     fetchUsers();
     fetchNotifications();
+    fetchGenres();
 
     setInterval(fetchStatus, 5000);
     setInterval(fetchGuilds, 10000);
@@ -883,7 +885,99 @@ function updateAnalytics(data) {
                 `).join('');
             }
         }
+
+        // Charts
+        if (typeof Chart !== 'undefined') {
+            updateCharts(data);
+        }
+
     } catch (e) { console.error('Error updating analytics', e); }
+}
+
+let genreChartInstance = null;
+let discoveryChartInstance = null;
+
+function updateCharts(data) {
+    const genreCtx = document.getElementById('genreChart');
+    const discoveryCtx = document.getElementById('discoveryChart');
+
+    // Genre Chart - Pie/Doughnut
+    if (genreCtx && data.genre_distribution) {
+        const labels = data.genre_distribution.map(d => d.name);
+        const values = data.genre_distribution.map(d => d.plays);
+
+        if (genreChartInstance) {
+            genreChartInstance.data.labels = labels;
+            genreChartInstance.data.datasets[0].data = values;
+            genreChartInstance.update();
+        } else {
+            genreChartInstance = new Chart(genreCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Plays',
+                        data: values,
+                        backgroundColor: [
+                            '#8b5cf6', '#ec4899', '#3b82f6', '#10b981', '#f59e0b',
+                            '#6366f1', '#ef4444', '#14b8a6', '#f97316', '#84cc16'
+                        ],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right', labels: { color: '#9ca3af' } }
+                    }
+                }
+            });
+        }
+    }
+
+    // Discovery Chart - Bar/Pie
+    if (discoveryCtx && data.discovery_breakdown) {
+        const labels = data.discovery_breakdown.map(d => d.discovery_source.replace('_', ' '));
+        const values = data.discovery_breakdown.map(d => d.count);
+
+        if (discoveryChartInstance) {
+            discoveryChartInstance.data.labels = labels;
+            discoveryChartInstance.data.datasets[0].data = values;
+            discoveryChartInstance.update();
+        } else {
+            discoveryChartInstance = new Chart(discoveryCtx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Plays by Source',
+                        data: values,
+                        backgroundColor: '#6366f1',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            ticks: { color: '#9ca3af' }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#9ca3af' }
+                        }
+                    }
+                }
+            });
+        }
+    }
 }
 
 async function fetchSongs() {
@@ -998,6 +1092,8 @@ function updateLibraryList(library) {
             </tr>
         `;
     }).join('');
+
+    filterLibrary();
 }
 
 function selectGuild(e, id) {
@@ -1301,13 +1397,14 @@ function initGlobalSearch() {
 // PANEL SEARCHES (Library, History, Users, Servers)
 // ============================================================
 function initPanelSearches() {
-    // Library search
+    // Library search & filter
     const librarySearch = document.getElementById('library-search');
-    if (librarySearch) {
-        librarySearch.addEventListener('input', debounce(() => {
-            filterTable('library-list', librarySearch.value);
-        }, 200));
-    }
+    const genreFilter = document.getElementById('library-filter-genre');
+
+    const debouncedLibraryFilter = debounce(filterLibrary, 200);
+
+    if (librarySearch) librarySearch.addEventListener('input', debouncedLibraryFilter);
+    if (genreFilter) genreFilter.addEventListener('change', debouncedLibraryFilter);
 
     // History search
     const historySearch = document.getElementById('history-search');
@@ -1333,6 +1430,51 @@ function initPanelSearches() {
         }, 200));
     }
 }
+
+async function fetchGenres() {
+    try {
+        const res = await fetch(API.genres);
+        const data = await res.json();
+        const select = document.getElementById('library-filter-genre');
+        if (select && data.genres) {
+            const current = select.value;
+            select.innerHTML = '<option value="">All Genres</option>' +
+                data.genres.map(g => `<option value="${g}">${g}</option>`).join('');
+            select.value = current;
+        }
+    } catch (e) { console.error('Failed to fetch genres', e); }
+}
+
+function filterLibrary() {
+    const searchInput = document.getElementById('library-search');
+    const genreSelect = document.getElementById('library-filter-genre');
+    const table = document.getElementById('library-list');
+
+    if (!table) return;
+
+    const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
+    const genre = genreSelect ? genreSelect.value.toLowerCase() : '';
+
+    const rows = table.querySelectorAll('tr');
+
+    rows.forEach(row => {
+        if (row.querySelector('.table-empty')) return;
+
+        // Col indices: 0=Title, 1=Artist, 2=Genre
+        const cols = row.querySelectorAll('td');
+        if (cols.length < 3) return;
+
+        const title = cols[0].textContent.toLowerCase();
+        const artist = cols[1].textContent.toLowerCase();
+        const rowGenre = cols[2].textContent.toLowerCase();
+
+        const matchesSearch = !query || title.includes(query) || artist.includes(query);
+        const matchesGenre = !genre || rowGenre === genre || (genre === '-' && (rowGenre === '-' || rowGenre === ''));
+
+        row.style.display = (matchesSearch && matchesGenre) ? '' : 'none';
+    });
+}
+
 
 function filterTable(tableId, query) {
     const table = document.getElementById(tableId);

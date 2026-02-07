@@ -165,6 +165,7 @@ class DashboardCog(commands.Cog):
         self.app.router.add_post("/api/guilds/{guild_id}/control/{action}", self._handle_control)
         self.app.router.add_get("/api/analytics", self._handle_analytics)
         self.app.router.add_get("/api/songs", self._handle_songs)
+        self.app.router.add_get("/api/genres", self._handle_genres)
         self.app.router.add_get("/api/library", self._handle_library)
         self.app.router.add_get("/api/users", self._handle_users)
         self.app.router.add_get("/api/users/{user_id}/preferences", self._handle_user_prefs)
@@ -380,6 +381,16 @@ class DashboardCog(commands.Cog):
             
         return web.json_response({"songs": data})
     
+    async def _handle_genres(self, request: web.Request) -> web.Response:
+        """Get list of all genres."""
+        if not hasattr(self.bot, "db"):
+            return web.json_response({"genres": []})
+            
+        from src.database.crud import SongCRUD
+        crud = SongCRUD(self.bot.db)
+        genres = await crud.get_all_genres()
+        return web.json_response({"genres": genres})
+    
     async def _handle_analytics(self, request: web.Request) -> web.Response:
         """Get analytics data."""
         if not hasattr(self.bot, "db"):
@@ -406,6 +417,10 @@ class DashboardCog(commands.Cog):
         top_played_genres = await crud.get_top_played_genres(limit=5, guild_id=gid)
         top_useful_users = await crud.get_top_useful_users(limit=5)
         
+        # Extended stats for charts
+        discovery_stats = await crud.get_discovery_breakdown(guild_id=gid)
+        genre_dist = await crud.get_top_played_genres(limit=15, guild_id=gid)
+        
         formatted_users = []
         for u in top_users:
             d = dict(u)
@@ -429,6 +444,8 @@ class DashboardCog(commands.Cog):
             "top_played_artists": [dict(r) for r in top_played_artists],
             "top_played_genres": [dict(r) for r in top_played_genres],
             "top_useful_users": [dict(r) for r in top_useful_users],
+            "discovery_breakdown": [dict(r) for r in discovery_stats],
+            "genre_distribution": [dict(r) for r in genre_dist],
         })
     
     async def _handle_top_songs(self, request: web.Request) -> web.Response:

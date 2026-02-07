@@ -347,286 +347,293 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Charts Row -->
+                <div class="bento-card bento-chart">
+                    <h3 class="bento-title">Genre Distribution</h3>
+                    <div class="chart-container">
+                        <canvas id="genreChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="bento-card bento-chart">
+                    <h3 class="bento-title">Discovery Sources</h3>
+                    <div class="chart-container">
+                        <canvas id="discoveryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+    </div>
+
+    <!-- LIBRARY TAB -->
+    <div id="tab-library" class="tab-panel">
+        <div class="panel-header">
+            <h1 class="panel-title">Song Library</h1>
+            <p class="panel-subtitle">All songs in your collection</p>
+        </div>
+        <div class="panel-toolbar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input type="text" id="library-search" placeholder="Search library..." class="search-input">
+            </div>
+            <div class="filter-group">
+                <select id="library-filter-genre" class="filter-select">
+                    <option value="">All Genres</option>
+                </select>
+            </div>
+        </div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Artist</th>
+                        <th>Genre</th>
+                        <th>Source</th>
+                        <th>Added By</th>
+                        <th>Added</th>
+                    </tr>
+                </thead>
+                <tbody id="library-list">
+                    <tr>
+                        <td colspan="6" class="table-empty">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div id="tab-songs" class="tab-panel">
+        <div class="panel-header">
+            <h1 class="panel-title">Playback History</h1>
+            <p class="panel-subtitle">Recent song plays</p>
+        </div>
+        <div class="panel-toolbar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input type="text" id="history-search" placeholder="Search history..." class="search-input">
+            </div>
+        </div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Artist</th>
+                        <th>Duration</th>
+                        <th>Genre</th>
+                        <th>Requested By</th>
+                        <th>Reactions</th>
+                        <th>Played</th>
+                    </tr>
+                </thead>
+                <tbody id="songs-list">
+                    <tr>
+                        <td colspan="7" class="table-empty">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- USERS TAB -->
+    <div id="tab-users" class="tab-panel">
+        <div class="panel-header">
+            <h1 class="panel-title">Users</h1>
+            <p class="panel-subtitle">All users who have interacted with the bot</p>
+        </div>
+        <div class="panel-toolbar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input type="text" id="users-search" placeholder="Search users..." class="search-input">
+            </div>
+        </div>
+        <div class="users-grid" id="users-directory">
+            <div class="list-empty">Loading...</div>
+        </div>
+    </div>
+
+    <!-- SERVERS TAB -->
+    <div id="tab-servers" class="tab-panel">
+        <div class="panel-header">
+            <h1 class="panel-title">Servers</h1>
+            <p class="panel-subtitle">Active Discord servers</p>
+        </div>
+        <div class="panel-toolbar">
+            <div class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                </svg>
+                <input type="text" id="servers-search" placeholder="Search servers..." class="search-input">
+            </div>
+        </div>
+        <div class="servers-grid" id="guild-list">
+            <div class="list-empty">Loading...</div>
+        </div>
+    </div>
+
+    <!-- LOGS TAB -->
+    <div id="tab-logs" class="tab-panel">
+        <div class="logs-container">
+            <!-- Level Filter Pills -->
+            <div class="logs-level-bar">
+                <button class="logs-pill active" data-level="all">
+                    <span class="logs-pill-count" id="log-count-all">0</span>
+                    <span class="logs-pill-label">All</span>
+                </button>
+                <button class="logs-pill" data-level="DEBUG">
+                    <span class="logs-pill-dot dot-debug"></span>
+                    <span class="logs-pill-count" id="log-count-debug">0</span>
+                    <span class="logs-pill-label">Debug</span>
+                </button>
+                <button class="logs-pill" data-level="INFO">
+                    <span class="logs-pill-dot dot-info"></span>
+                    <span class="logs-pill-count" id="log-count-info">0</span>
+                    <span class="logs-pill-label">Info</span>
+                </button>
+                <button class="logs-pill" data-level="WARNING">
+                    <span class="logs-pill-dot dot-warning"></span>
+                    <span class="logs-pill-count" id="log-count-warning">0</span>
+                    <span class="logs-pill-label">Warn</span>
+                </button>
+                <button class="logs-pill" data-level="ERROR">
+                    <span class="logs-pill-dot dot-error"></span>
+                    <span class="logs-pill-count" id="log-count-error">0</span>
+                    <span class="logs-pill-label">Error</span>
+                </button>
             </div>
 
-            <!-- LIBRARY TAB -->
-            <div id="tab-library" class="tab-panel">
-                <div class="panel-header">
-                    <h1 class="panel-title">Song Library</h1>
-                    <p class="panel-subtitle">All songs in your collection</p>
+            <!-- Toolbar -->
+            <div class="logs-toolbar">
+                <div class="logs-search-wrap">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="m21 21-4.3-4.3" />
+                    </svg>
+                    <input type="text" id="log-search" class="logs-search-input" placeholder="Filter logs...">
                 </div>
-                <div class="panel-toolbar">
-                    <div class="search-box">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
-                            height="18">
-                            <circle cx="11" cy="11" r="8" />
-                            <path d="m21 21-4.3-4.3" />
+                <div class="logs-toolbar-filters">
+                    <select id="log-filter-category" class="logs-select">
+                        <option value="">All Categories</option>
+                    </select>
+                    <select id="log-filter-source" class="logs-select">
+                        <option value="">All Sources</option>
+                    </select>
+                    <select id="log-filter-guild" class="logs-select">
+                        <option value="">All Guilds</option>
+                    </select>
+                </div>
+                <div class="logs-toolbar-actions">
+                    <button class="logs-btn" id="log-toggle-scroll" title="Toggle auto-scroll">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14"
+                            height="14">
+                            <path d="M12 5v14M19 12l-7 7-7-7" />
                         </svg>
-                        <input type="text" id="library-search" placeholder="Search library..." class="search-input">
-                    </div>
-                    <div class="filter-group">
-                        <select id="library-filter-genre" class="filter-select">
-                            <option value="">All Genres</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="data-table-wrap">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Title</th>
-                                <th>Artist</th>
-                                <th>Genre</th>
-                                <th>Source</th>
-                                <th>Added By</th>
-                                <th>Added</th>
-                            </tr>
-                        </thead>
-                        <tbody id="library-list">
-                            <tr>
-                                <td colspan="6" class="table-empty">Loading...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- HISTORY TAB -->
-            <div id="tab-songs" class="tab-panel">
-                <div class="panel-header">
-                    <h1 class="panel-title">Playback History</h1>
-                    <p class="panel-subtitle">Recent song plays</p>
-                </div>
-                <div class="panel-toolbar">
-                    <div class="search-box">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
-                            height="18">
-                            <circle cx="11" cy="11" r="8" />
-                            <path d="m21 21-4.3-4.3" />
+                        Auto-scroll
+                    </button>
+                    <button class="logs-btn" id="log-clear" title="Clear all logs">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14"
+                            height="14">
+                            <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                         </svg>
-                        <input type="text" id="history-search" placeholder="Search history..." class="search-input">
-                    </div>
-                </div>
-                <div class="data-table-wrap">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Title</th>
-                                <th>Artist</th>
-                                <th>Duration</th>
-                                <th>Genre</th>
-                                <th>Requested By</th>
-                                <th>Reactions</th>
-                                <th>Played</th>
-                            </tr>
-                        </thead>
-                        <tbody id="songs-list">
-                            <tr>
-                                <td colspan="7" class="table-empty">Loading...</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                        Clear
+                    </button>
                 </div>
             </div>
 
-            <!-- USERS TAB -->
-            <div id="tab-users" class="tab-panel">
-                <div class="panel-header">
-                    <h1 class="panel-title">Users</h1>
-                    <p class="panel-subtitle">All users who have interacted with the bot</p>
-                </div>
-                <div class="panel-toolbar">
-                    <div class="search-box">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
-                            height="18">
-                            <circle cx="11" cy="11" r="8" />
-                            <path d="m21 21-4.3-4.3" />
-                        </svg>
-                        <input type="text" id="users-search" placeholder="Search users..." class="search-input">
-                    </div>
-                </div>
-                <div class="users-grid" id="users-directory">
-                    <div class="list-empty">Loading...</div>
+            <!-- Log Viewport -->
+            <div class="logs-viewport" id="logs-viewport">
+                <div class="logs-empty" id="logs-empty">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40"
+                        height="40">
+                        <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Waiting for log events...</span>
                 </div>
             </div>
 
-            <!-- SERVERS TAB -->
-            <div id="tab-servers" class="tab-panel">
-                <div class="panel-header">
-                    <h1 class="panel-title">Servers</h1>
-                    <p class="panel-subtitle">Active Discord servers</p>
+            <!-- Status Bar -->
+            <div class="logs-statusbar">
+                <div class="logs-statusbar-left">
+                    <span class="logs-ws-indicator" id="logs-ws-indicator">
+                        <span class="logs-ws-dot"></span> Connected
+                    </span>
+                    <span class="logs-status-sep">|</span>
+                    <span><span id="logs-shown-count">0</span> shown</span>
                 </div>
-                <div class="panel-toolbar">
-                    <div class="search-box">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18"
-                            height="18">
-                            <circle cx="11" cy="11" r="8" />
-                            <path d="m21 21-4.3-4.3" />
-                        </svg>
-                        <input type="text" id="servers-search" placeholder="Search servers..." class="search-input">
-                    </div>
-                </div>
-                <div class="servers-grid" id="guild-list">
-                    <div class="list-empty">Loading...</div>
+                <div class="logs-statusbar-right">
+                    <span id="logs-scroll-label">Auto-scroll ON</span>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <!-- LOGS TAB -->
-            <div id="tab-logs" class="tab-panel">
-                <div class="logs-container">
-                    <!-- Level Filter Pills -->
-                    <div class="logs-level-bar">
-                        <button class="logs-pill active" data-level="all">
-                            <span class="logs-pill-count" id="log-count-all">0</span>
-                            <span class="logs-pill-label">All</span>
-                        </button>
-                        <button class="logs-pill" data-level="DEBUG">
-                            <span class="logs-pill-dot dot-debug"></span>
-                            <span class="logs-pill-count" id="log-count-debug">0</span>
-                            <span class="logs-pill-label">Debug</span>
-                        </button>
-                        <button class="logs-pill" data-level="INFO">
-                            <span class="logs-pill-dot dot-info"></span>
-                            <span class="logs-pill-count" id="log-count-info">0</span>
-                            <span class="logs-pill-label">Info</span>
-                        </button>
-                        <button class="logs-pill" data-level="WARNING">
-                            <span class="logs-pill-dot dot-warning"></span>
-                            <span class="logs-pill-count" id="log-count-warning">0</span>
-                            <span class="logs-pill-label">Warn</span>
-                        </button>
-                        <button class="logs-pill" data-level="ERROR">
-                            <span class="logs-pill-dot dot-error"></span>
-                            <span class="logs-pill-count" id="log-count-error">0</span>
-                            <span class="logs-pill-label">Error</span>
-                        </button>
-                    </div>
+    <!-- SETTINGS TAB -->
+    <div id="tab-settings" class="tab-panel">
+        <div class="panel-header">
+            <h1 class="panel-title" id="settings-title">Settings</h1>
+            <p class="panel-subtitle">Configure your bot preferences</p>
+        </div>
 
-                    <!-- Toolbar -->
-                    <div class="logs-toolbar">
-                        <div class="logs-search-wrap">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16"
-                                height="16">
-                                <circle cx="11" cy="11" r="8" />
-                                <path d="m21 21-4.3-4.3" />
-                            </svg>
-                            <input type="text" id="log-search" class="logs-search-input" placeholder="Filter logs...">
-                        </div>
-                        <div class="logs-toolbar-filters">
-                            <select id="log-filter-category" class="logs-select">
-                                <option value="">All Categories</option>
-                            </select>
-                            <select id="log-filter-source" class="logs-select">
-                                <option value="">All Sources</option>
-                            </select>
-                            <select id="log-filter-guild" class="logs-select">
-                                <option value="">All Guilds</option>
-                            </select>
-                        </div>
-                        <div class="logs-toolbar-actions">
-                            <button class="logs-btn" id="log-toggle-scroll" title="Toggle auto-scroll">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14"
-                                    height="14">
-                                    <path d="M12 5v14M19 12l-7 7-7-7" />
-                                </svg>
-                                Auto-scroll
-                            </button>
-                            <button class="logs-btn" id="log-clear" title="Clear all logs">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14"
-                                    height="14">
-                                    <path
-                                        d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                                </svg>
-                                Clear
-                            </button>
-                        </div>
+        <div class="settings-grid">
+            <!-- Global Settings -->
+            <div class="settings-card" id="settings-global" style="display: none;">
+                <h3 class="settings-section-title">Global Settings</h3>
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <span class="setting-label">Max Concurrent Servers</span>
+                        <span class="setting-description">Limit the number of servers the bot can join</span>
                     </div>
-
-                    <!-- Log Viewport -->
-                    <div class="logs-viewport" id="logs-viewport">
-                        <div class="logs-empty" id="logs-empty">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40"
-                                height="40">
-                                <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <span>Waiting for log events...</span>
-                        </div>
-                    </div>
-
-                    <!-- Status Bar -->
-                    <div class="logs-statusbar">
-                        <div class="logs-statusbar-left">
-                            <span class="logs-ws-indicator" id="logs-ws-indicator">
-                                <span class="logs-ws-dot"></span> Connected
-                            </span>
-                            <span class="logs-status-sep">|</span>
-                            <span><span id="logs-shown-count">0</span> shown</span>
-                        </div>
-                        <div class="logs-statusbar-right">
-                            <span id="logs-scroll-label">Auto-scroll ON</span>
-                        </div>
-                    </div>
+                    <input type="number" id="setting-max-servers-tab" class="setting-input" placeholder="Unlimited">
                 </div>
+                <button class="btn-primary" onclick="saveSettingsTab()">Save Settings</button>
             </div>
 
-            <!-- SETTINGS TAB -->
-            <div id="tab-settings" class="tab-panel">
-                <div class="panel-header">
-                    <h1 class="panel-title" id="settings-title">Settings</h1>
-                    <p class="panel-subtitle">Configure your bot preferences</p>
-                </div>
-
-                <div class="settings-grid">
-                    <!-- Global Settings -->
-                    <div class="settings-card" id="settings-global" style="display: none;">
-                        <h3 class="settings-section-title">Global Settings</h3>
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <span class="setting-label">Max Concurrent Servers</span>
-                                <span class="setting-description">Limit the number of servers the bot can join</span>
-                            </div>
-                            <input type="number" id="setting-max-servers-tab" class="setting-input"
-                                placeholder="Unlimited">
-                        </div>
-                        <button class="btn-primary" onclick="saveSettingsTab()">Save Settings</button>
+            <!-- Server Settings -->
+            <div class="settings-card" id="settings-server" style="display: none;">
+                <h3 class="settings-section-title">Server Settings</h3>
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <span class="setting-label">Pre-Buffering</span>
+                        <span class="setting-description">Pre-load the next song for gapless playback</span>
                     </div>
-
-                    <!-- Server Settings -->
-                    <div class="settings-card" id="settings-server" style="display: none;">
-                        <h3 class="settings-section-title">Server Settings</h3>
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <span class="setting-label">Pre-Buffering</span>
-                                <span class="setting-description">Pre-load the next song for gapless playback</span>
-                            </div>
-                            <label class="toggle">
-                                <input type="checkbox" id="setting-pre-buffer">
-                                <span class="toggle-slider"></span>
-                            </label>
-                        </div>
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <span class="setting-label">Buffer Amount</span>
-                                <span class="setting-description">Songs to keep ready: <strong
-                                        id="buffer-val">1</strong></span>
-                            </div>
-                            <input type="range" id="setting-buffer-amount" min="1" max="10" value="1"
-                                class="range-input"
-                                oninput="document.getElementById('buffer-val').textContent = this.value">
-                        </div>
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <span class="setting-label">Max Song Duration</span>
-                                <span class="setting-description">Skip songs longer than this (minutes)</span>
-                            </div>
-                            <input type="number" id="setting-max-duration" class="setting-input" placeholder="6" min="1"
-                                max="60">
-                        </div>
-                        <button class="btn-primary" onclick="saveServerSettings()">Save Settings</button>
-                    </div>
+                    <label class="toggle">
+                        <input type="checkbox" id="setting-pre-buffer">
+                        <span class="toggle-slider"></span>
+                    </label>
                 </div>
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <span class="setting-label">Buffer Amount</span>
+                        <span class="setting-description">Songs to keep ready: <strong id="buffer-val">1</strong></span>
+                    </div>
+                    <input type="range" id="setting-buffer-amount" min="1" max="10" value="1" class="range-input"
+                        oninput="document.getElementById('buffer-val').textContent = this.value">
+                </div>
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <span class="setting-label">Max Song Duration</span>
+                        <span class="setting-description">Skip songs longer than this (minutes)</span>
+                    </div>
+                    <input type="number" id="setting-max-duration" class="setting-input" placeholder="6" min="1"
+                        max="60">
+                </div>
+                <button class="btn-primary" onclick="saveServerSettings()">Save Settings</button>
             </div>
-        </main>
+        </div>
+    </div>
+    </main>
     </div>
 
     <!-- Command Palette Modal -->
@@ -651,6 +658,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/static/dashboard.js"></script>
 </body>
 

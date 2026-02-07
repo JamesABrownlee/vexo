@@ -148,6 +148,11 @@ class SongCRUD:
         )
         return [row["genre"] for row in rows]
 
+    async def get_all_genres(self) -> list[str]:
+        """Get all distinct genres in the database."""
+        rows = await self.db.fetch_all("SELECT DISTINCT genre FROM song_genres ORDER BY genre")
+        return [row["genre"] for row in rows]
+
 
 class UserCRUD:
     """CRUD operations for users."""
@@ -734,7 +739,27 @@ class AnalyticsCRUD:
             ORDER BY score DESC
             LIMIT ?
         """
+            LIMIT ?
+        """
         return await self.db.fetch_all(query, (limit,))
+
+    async def get_discovery_breakdown(self, guild_id: int = None) -> list[dict]:
+        """Get playback count by discovery source."""
+        params = []
+        where_clause = ""
+        if guild_id:
+            where_clause = "WHERE ps.guild_id = ?"
+            params.append(guild_id)
+            
+        query = f"""
+            SELECT ph.discovery_source, COUNT(*) as count
+            FROM playback_history ph
+            JOIN playback_sessions ps ON ph.session_id = ps.id
+            {where_clause}
+            GROUP BY ph.discovery_source
+            ORDER BY count DESC
+        """
+        return await self.db.fetch_all(query, tuple(params))
 
 
 class LibraryCRUD:

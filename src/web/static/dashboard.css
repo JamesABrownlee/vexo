@@ -2160,3 +2160,23 @@ body::before {
 .text-error {
     color: var(--error);
 }
+/* Charts */
+.bento-chart {
+    grid-column: span 6;
+    grid-row: span 2;
+    display: flex;
+    flex-direction: column;
+}
+
+.chart-container {
+    flex: 1;
+    position: relative;
+    min-height: 200px;
+    width: 100%;
+}
+
+@media (max-width: 1200px) {
+    .bento-chart {
+        grid-column: span 12;
+    }
+}
