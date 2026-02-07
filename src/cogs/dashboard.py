@@ -61,7 +61,7 @@ class WebSocketManager:
     
     def __init__(self):
         self.clients: set[web.WebSocketResponse] = set()
-        self.recent_logs: deque = deque(maxlen=100)
+        self.recent_logs: deque = deque(maxlen=500)
     
     async def broadcast(self, message: dict):
         self.recent_logs.append(message)

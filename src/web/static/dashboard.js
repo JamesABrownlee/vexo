@@ -20,7 +20,27 @@ let ws = null;
 let currentGuild = null;
 let currentScope = 'global';
 
-// Initialize
+// ============================================================
+// LOG STATE
+// ============================================================
+const logState = {
+    entries: [],           // All log entries (capped at MAX_LOGS)
+    maxEntries: 1000,
+    autoScroll: true,
+    levelFilter: 'all',    // 'all' | 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
+    searchQuery: '',
+    sourceFilter: '',
+    guildFilter: '',
+    counts: { all: 0, DEBUG: 0, INFO: 0, WARNING: 0, ERROR: 0 },
+    knownSources: new Set(),
+    knownGuilds: new Map(), // guild_id -> name
+    wsConnected: false,
+    searchTimeout: null,
+};
+
+// ============================================================
+// INITIALIZE
+// ============================================================
 document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
     fetchStatus();
@@ -45,37 +65,477 @@ document.addEventListener('DOMContentLoaded', () => {
             switchTab(tab.dataset.tab);
         });
     });
+
+    // Log UI initialization
+    initLogControls();
 });
 
-// WebSocket for live logs
+// ============================================================
+// LOG CONTROLS SETUP
+// ============================================================
+function initLogControls() {
+    // Level filter pills
+    document.querySelectorAll('.logs-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+            const level = pill.dataset.level;
+            document.querySelectorAll('.logs-pill').forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            logState.levelFilter = level;
+            applyLogFilters();
+        });
+    });
+
+    // Search input
+    const searchInput = document.getElementById('log-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            clearTimeout(logState.searchTimeout);
+            logState.searchTimeout = setTimeout(() => {
+                logState.searchQuery = searchInput.value.toLowerCase().trim();
+                applyLogFilters();
+            }, 150);
+        });
+    }
+
+    // Source filter
+    const sourceSelect = document.getElementById('log-filter-source');
+    if (sourceSelect) {
+        sourceSelect.addEventListener('change', () => {
+            logState.sourceFilter = sourceSelect.value;
+            applyLogFilters();
+        });
+    }
+
+    // Guild filter
+    const guildSelect = document.getElementById('log-filter-guild');
+    if (guildSelect) {
+        guildSelect.addEventListener('change', () => {
+            logState.guildFilter = guildSelect.value;
+            applyLogFilters();
+        });
+    }
+
+    // Auto-scroll toggle
+    const scrollBtn = document.getElementById('log-toggle-scroll');
+    if (scrollBtn) {
+        scrollBtn.classList.add('active');
+        scrollBtn.addEventListener('click', () => {
+            logState.autoScroll = !logState.autoScroll;
+            scrollBtn.classList.toggle('active', logState.autoScroll);
+            const label = document.getElementById('logs-scroll-label');
+            if (label) label.textContent = logState.autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF';
+            if (logState.autoScroll) scrollLogsToBottom();
+        });
+    }
+
+    // Clear button
+    const clearBtn = document.getElementById('log-clear');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearLogs);
+    }
+
+    // Keyboard: Ctrl+K to focus search
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            const el = document.getElementById('log-search');
+            if (el) el.focus();
+        }
+    });
+
+    // Detect manual scroll to pause auto-scroll
+    const viewport = document.getElementById('logs-viewport');
+    if (viewport) {
+        viewport.addEventListener('scroll', () => {
+            if (!logState.autoScroll) return;
+            const { scrollTop, scrollHeight, clientHeight } = viewport;
+            // If user scrolled up more than 50px from bottom, pause auto-scroll
+            if (scrollHeight - scrollTop - clientHeight > 50) {
+                logState.autoScroll = false;
+                const scrollBtn = document.getElementById('log-toggle-scroll');
+                if (scrollBtn) scrollBtn.classList.remove('active');
+                const label = document.getElementById('logs-scroll-label');
+                if (label) label.textContent = 'Auto-scroll OFF';
+            }
+        });
+    }
+}
+
+// ============================================================
+// WEBSOCKET FOR LIVE LOGS
+// ============================================================
 function initWebSocket() {
     try {
         ws = new WebSocket(`ws://${location.host}/ws/logs`);
+        ws.onopen = () => {
+            logState.wsConnected = true;
+            updateWsStatus(true);
+        };
         ws.onmessage = (e) => {
             const log = JSON.parse(e.data);
             addLogEntry(log);
         };
-        ws.onclose = () => setTimeout(initWebSocket, 3000);
+        ws.onclose = () => {
+            logState.wsConnected = false;
+            updateWsStatus(false);
+            setTimeout(initWebSocket, 3000);
+        };
+        ws.onerror = () => {
+            logState.wsConnected = false;
+            updateWsStatus(false);
+        };
     } catch (e) {
         console.error('WS Error', e);
     }
 }
 
-function addLogEntry(log) {
-    const logsEl = document.getElementById('logs');
-    if (!logsEl) return;
-
-    const time = new Date(log.timestamp * 1000).toLocaleTimeString();
-    const entry = document.createElement('div');
-    entry.className = `log-entry log-${log.level}`;
-    entry.innerHTML = `<span class="log-time">${time}</span> [${log.level}] ${log.message}`;
-    logsEl.appendChild(entry);
-    logsEl.scrollTop = logsEl.scrollHeight;
-
-    while (logsEl.children.length > 200) logsEl.removeChild(logsEl.firstChild);
+function updateWsStatus(connected) {
+    const indicator = document.getElementById('logs-ws-indicator');
+    if (!indicator) return;
+    const dot = indicator.querySelector('.logs-ws-dot');
+    if (dot) {
+        dot.classList.toggle('disconnected', !connected);
+    }
+    indicator.lastChild.textContent = connected ? ' Connected' : ' Disconnected';
 }
 
-// Fetch functions
+// ============================================================
+// LOG ENTRY PROCESSING
+// ============================================================
+function addLogEntry(log) {
+    // Store entry
+    const entry = {
+        timestamp: log.timestamp,
+        level: log.level || 'INFO',
+        message: log.message || '',
+        logger: log.logger || '',
+        guild_id: log.guild_id || null,
+        parsed: parseLogMessage(log.message || ''),
+    };
+
+    logState.entries.push(entry);
+
+    // Cap entries
+    if (logState.entries.length > logState.maxEntries) {
+        const removed = logState.entries.shift();
+        // Remove first DOM node
+        const viewport = document.getElementById('logs-viewport');
+        if (viewport && viewport.firstElementChild && viewport.firstElementChild.classList.contains('log-row')) {
+            viewport.removeChild(viewport.firstElementChild);
+        }
+        // Decrement count
+        logState.counts[removed.level] = Math.max(0, (logState.counts[removed.level] || 0) - 1);
+        logState.counts.all = Math.max(0, logState.counts.all - 1);
+    }
+
+    // Update counts
+    logState.counts.all++;
+    logState.counts[entry.level] = (logState.counts[entry.level] || 0) + 1;
+    updateLogCounts();
+
+    // Track sources
+    const shortSource = shortenLogger(entry.logger);
+    if (shortSource && !logState.knownSources.has(shortSource)) {
+        logState.knownSources.add(shortSource);
+        updateSourceFilter();
+    }
+
+    // Track guilds
+    if (entry.guild_id && !logState.knownGuilds.has(String(entry.guild_id))) {
+        logState.knownGuilds.set(String(entry.guild_id), String(entry.guild_id));
+        updateGuildFilter();
+    }
+
+    // Remove empty state
+    const emptyEl = document.getElementById('logs-empty');
+    if (emptyEl) emptyEl.remove();
+
+    // Render entry
+    const row = createLogRow(entry);
+    const viewport = document.getElementById('logs-viewport');
+    if (!viewport) return;
+
+    // Apply filter visibility
+    if (!matchesFilters(entry)) {
+        row.classList.add('log-hidden');
+    }
+
+    viewport.appendChild(row);
+    updateShownCount();
+
+    if (logState.autoScroll) {
+        scrollLogsToBottom();
+    }
+}
+
+// ============================================================
+// LOG MESSAGE PARSER
+// ============================================================
+function parseLogMessage(msg) {
+    // Try to detect structured log format: event_name key1=val1 key2='val2' ...
+    // Or key=value pairs anywhere in the message
+    const result = { event: null, pairs: [], text: msg };
+
+    if (!msg) return result;
+
+    // Extract key=value pairs (handles quoted values)
+    const kvRegex = /(\w+)=(?:'([^']*)'|"([^"]*)"|(\S+))/g;
+    const pairs = [];
+    let match;
+    let cleaned = msg;
+
+    while ((match = kvRegex.exec(msg)) !== null) {
+        const key = match[1];
+        const val = match[2] !== undefined ? match[2] : match[3] !== undefined ? match[3] : match[4];
+        pairs.push({ key, val });
+    }
+
+    if (pairs.length > 0) {
+        // Remove all kv pairs from message to find the event/text part
+        cleaned = msg.replace(kvRegex, '').trim();
+
+        // The first word of the cleaned text might be the event name
+        const words = cleaned.split(/\s+/).filter(Boolean);
+        if (words.length > 0 && /^[a-z_][a-z0-9_]*$/i.test(words[0])) {
+            result.event = words[0];
+            result.text = words.slice(1).join(' ');
+        } else {
+            result.text = cleaned;
+        }
+        result.pairs = pairs;
+    } else {
+        // No kv pairs - check if first token looks like an event name
+        const words = msg.split(/\s+/);
+        if (words.length > 1 && /^[a-z_][a-z0-9_]*$/.test(words[0]) && words[0].includes('_')) {
+            result.event = words[0];
+            result.text = words.slice(1).join(' ');
+        }
+    }
+
+    return result;
+}
+
+function shortenLogger(loggerName) {
+    if (!loggerName) return '';
+    // "src.cogs.music" -> "music", "src.services.youtube" -> "youtube"
+    const parts = loggerName.split('.');
+    return parts[parts.length - 1] || loggerName;
+}
+
+// ============================================================
+// LOG ENTRY DOM CREATION
+// ============================================================
+function createLogRow(entry) {
+    const row = document.createElement('div');
+    row.className = `log-row level-${entry.level}`;
+    row.dataset.level = entry.level;
+    row.dataset.source = shortenLogger(entry.logger);
+    row.dataset.guild = entry.guild_id || '';
+
+    // Timestamp
+    const ts = document.createElement('span');
+    ts.className = 'log-ts';
+    const d = new Date(entry.timestamp * 1000);
+    ts.textContent = d.toLocaleTimeString('en-GB', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+
+    // Level dot
+    const dot = document.createElement('span');
+    dot.className = 'log-level-dot';
+
+    // Body
+    const body = document.createElement('span');
+    body.className = 'log-body';
+
+    // Source badge
+    const shortSource = shortenLogger(entry.logger);
+    if (shortSource) {
+        const source = document.createElement('span');
+        source.className = 'log-source';
+        source.textContent = shortSource;
+        body.appendChild(source);
+    }
+
+    // Parsed content
+    const parsed = entry.parsed;
+    if (parsed.event) {
+        const eventEl = document.createElement('span');
+        eventEl.className = 'log-event';
+        eventEl.textContent = parsed.event;
+        body.appendChild(eventEl);
+    }
+
+    if (parsed.pairs.length > 0) {
+        parsed.pairs.forEach(({ key, val }) => {
+            const kv = document.createElement('span');
+            kv.className = 'log-kv';
+            kv.innerHTML = `<span class="log-kv-key">${escapeHtml(key)}</span><span class="log-kv-eq">=</span><span class="log-kv-val">${escapeHtml(val)}</span>`;
+            body.appendChild(kv);
+        });
+    }
+
+    if (parsed.text) {
+        const msgEl = document.createElement('span');
+        msgEl.className = 'log-msg';
+        msgEl.textContent = parsed.event || parsed.pairs.length > 0 ? ' ' + parsed.text : parsed.text;
+        body.appendChild(msgEl);
+    }
+
+    // If no structured content was generated, show raw message
+    if (!parsed.event && parsed.pairs.length === 0 && !parsed.text) {
+        const msgEl = document.createElement('span');
+        msgEl.className = 'log-msg';
+        msgEl.textContent = entry.message;
+        body.appendChild(msgEl);
+    }
+
+    // Detail section (click to expand)
+    const detail = document.createElement('div');
+    detail.className = 'log-detail';
+    detail.innerHTML = `
+        <div class="log-detail-line"><span class="log-detail-label">Level</span> <span class="log-detail-value">${entry.level}</span></div>
+        <div class="log-detail-line"><span class="log-detail-label">Source</span> <span class="log-detail-value">${escapeHtml(entry.logger)}</span></div>
+        ${entry.guild_id ? `<div class="log-detail-line"><span class="log-detail-label">Guild</span> <span class="log-detail-value">${entry.guild_id}</span></div>` : ''}
+        <div class="log-detail-line"><span class="log-detail-label">Raw</span> <span class="log-detail-value">${escapeHtml(entry.message)}</span></div>
+    `;
+
+    row.appendChild(ts);
+    row.appendChild(dot);
+    row.appendChild(body);
+    row.appendChild(detail);
+
+    // Click to expand/collapse
+    row.addEventListener('click', () => {
+        row.classList.toggle('expanded');
+    });
+
+    return row;
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// ============================================================
+// FILTERING
+// ============================================================
+function applyLogFilters() {
+    const viewport = document.getElementById('logs-viewport');
+    if (!viewport) return;
+
+    const rows = viewport.querySelectorAll('.log-row');
+    let shown = 0;
+
+    rows.forEach((row, idx) => {
+        const entry = logState.entries[idx];
+        if (!entry) return;
+
+        if (matchesFilters(entry)) {
+            row.classList.remove('log-hidden');
+            shown++;
+        } else {
+            row.classList.add('log-hidden');
+        }
+    });
+
+    updateShownCount();
+}
+
+function matchesFilters(entry) {
+    // Level filter
+    if (logState.levelFilter !== 'all' && entry.level !== logState.levelFilter) {
+        return false;
+    }
+
+    // Source filter
+    if (logState.sourceFilter && shortenLogger(entry.logger) !== logState.sourceFilter) {
+        return false;
+    }
+
+    // Guild filter
+    if (logState.guildFilter && String(entry.guild_id || '') !== logState.guildFilter) {
+        return false;
+    }
+
+    // Search query
+    if (logState.searchQuery) {
+        const haystack = entry.message.toLowerCase();
+        if (!haystack.includes(logState.searchQuery)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// ============================================================
+// UI UPDATES
+// ============================================================
+function updateLogCounts() {
+    const ids = { all: 'log-count-all', DEBUG: 'log-count-debug', INFO: 'log-count-info', WARNING: 'log-count-warning', ERROR: 'log-count-error' };
+    for (const [level, id] of Object.entries(ids)) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = logState.counts[level] || 0;
+    }
+}
+
+function updateShownCount() {
+    const viewport = document.getElementById('logs-viewport');
+    const el = document.getElementById('logs-shown-count');
+    if (!viewport || !el) return;
+    const visible = viewport.querySelectorAll('.log-row:not(.log-hidden)').length;
+    el.textContent = visible;
+}
+
+function updateSourceFilter() {
+    const select = document.getElementById('log-filter-source');
+    if (!select) return;
+    const current = select.value;
+    const sorted = [...logState.knownSources].sort();
+    select.innerHTML = '<option value="">All Sources</option>' + sorted.map(s => `<option value="${s}"${s === current ? ' selected' : ''}>${s}</option>`).join('');
+}
+
+function updateGuildFilter() {
+    const select = document.getElementById('log-filter-guild');
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = '<option value="">All Guilds</option>';
+    for (const [id, name] of logState.knownGuilds) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = name;
+        if (id === current) opt.selected = true;
+        select.appendChild(opt);
+    }
+}
+
+function scrollLogsToBottom() {
+    const viewport = document.getElementById('logs-viewport');
+    if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+    }
+}
+
+function clearLogs() {
+    logState.entries = [];
+    logState.counts = { all: 0, DEBUG: 0, INFO: 0, WARNING: 0, ERROR: 0 };
+    updateLogCounts();
+
+    const viewport = document.getElementById('logs-viewport');
+    if (viewport) {
+        viewport.innerHTML = `
+            <div class="logs-empty" id="logs-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40"><path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>Waiting for log events...</span>
+            </div>`;
+    }
+    updateShownCount();
+}
+
+// ============================================================
+// FETCH FUNCTIONS (existing - unchanged)
+// ============================================================
 async function fetchStatus() {
     try {
         const res = await fetch(API.status);
@@ -121,6 +581,14 @@ async function fetchGuilds() {
         updateTopBar(data.guilds || []);
         updateGuildList(data.guilds || []);
         updateNowPlaying(data.guilds || []);
+
+        // Update known guilds for log filter
+        (data.guilds || []).forEach(g => {
+            if (g.id && !logState.knownGuilds.has(String(g.id))) {
+                logState.knownGuilds.set(String(g.id), g.name || String(g.id));
+                updateGuildFilter();
+            }
+        });
     } catch (e) {
         console.error('Failed to fetch guilds', e);
     }
@@ -443,12 +911,23 @@ function switchTab(tab) {
     const tabBtn = document.querySelector(`[data-tab="${tab}"]`);
     if (tabBtn) tabBtn.classList.add('active');
 
-    document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+    document.querySelectorAll('.tab-content').forEach(c => {
+        c.style.display = 'none';
+        c.classList.remove('active');
+    });
     const content = document.getElementById(`tab-${tab}`);
-    if (content) content.style.display = 'block';
+    if (content) {
+        content.style.display = tab === 'logs' ? 'flex' : 'block';
+        content.classList.add('active');
+    }
 
     if (tab === 'settings') {
         loadSettingsTab();
+    }
+
+    // Scroll logs to bottom when switching to logs tab
+    if (tab === 'logs' && logState.autoScroll) {
+        requestAnimationFrame(scrollLogsToBottom);
     }
 }
 
@@ -465,7 +944,6 @@ async function switchScope(scope) {
     if (scope === 'global') {
         fetchStatus();
         switchTab('dashboard');
-        // Reset labels
         const gLabel = document.getElementById('stat-guilds');
         if (gLabel) gLabel.nextElementSibling.textContent = 'Servers';
     } else {
@@ -493,7 +971,6 @@ async function loadSettingsTab() {
         if (globalBlock) globalBlock.style.display = 'block';
         if (serverBlock) serverBlock.style.display = 'none';
 
-        // Fetch global
         try {
             const res = await fetch(API.settings_global);
             const data = await res.json();
@@ -507,7 +984,6 @@ async function loadSettingsTab() {
         if (globalBlock) globalBlock.style.display = 'none';
         if (serverBlock) serverBlock.style.display = 'block';
 
-        // Fetch server
         try {
             const res = await fetch(API.settings(currentScope));
             const data = await res.json();
@@ -558,6 +1034,7 @@ function updateNotifications(list) {
 }
 
 function toggleNotifications() {
+    const dd = document.getElementById('notif-dropdown');
     if (dd) dd.classList.toggle('show');
 }
 

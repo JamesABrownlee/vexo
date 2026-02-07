@@ -352,11 +352,82 @@
 
             <!-- LOGS TAB -->
             <div id="tab-logs" class="tab-content" style="display: none;">
-                <div class="card" style="height: 80vh;">
-                    <div class="card-header">
-                        <h2 class="card-title">📜 Live System Logs</h2>
+                <!-- Level Filter Pills -->
+                <div class="logs-level-bar">
+                    <button class="logs-pill active" data-level="all">
+                        <span class="logs-pill-count" id="log-count-all">0</span>
+                        <span class="logs-pill-label">All</span>
+                    </button>
+                    <button class="logs-pill" data-level="DEBUG">
+                        <span class="logs-pill-dot dot-debug"></span>
+                        <span class="logs-pill-count" id="log-count-debug">0</span>
+                        <span class="logs-pill-label">Debug</span>
+                    </button>
+                    <button class="logs-pill" data-level="INFO">
+                        <span class="logs-pill-dot dot-info"></span>
+                        <span class="logs-pill-count" id="log-count-info">0</span>
+                        <span class="logs-pill-label">Info</span>
+                    </button>
+                    <button class="logs-pill" data-level="WARNING">
+                        <span class="logs-pill-dot dot-warning"></span>
+                        <span class="logs-pill-count" id="log-count-warning">0</span>
+                        <span class="logs-pill-label">Warn</span>
+                    </button>
+                    <button class="logs-pill" data-level="ERROR">
+                        <span class="logs-pill-dot dot-error"></span>
+                        <span class="logs-pill-count" id="log-count-error">0</span>
+                        <span class="logs-pill-label">Error</span>
+                    </button>
+                </div>
+
+                <!-- Toolbar: Search + Filters + Actions -->
+                <div class="logs-toolbar">
+                    <div class="logs-search-wrap">
+                        <svg class="logs-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                        </svg>
+                        <input type="text" id="log-search" class="logs-search-input" placeholder="Filter logs...">
                     </div>
-                    <div class="logs" id="logs" style="height: 100%;"></div>
+                    <div class="logs-toolbar-filters">
+                        <select id="log-filter-source" class="logs-select">
+                            <option value="">All Sources</option>
+                        </select>
+                        <select id="log-filter-guild" class="logs-select">
+                            <option value="">All Guilds</option>
+                        </select>
+                    </div>
+                    <div class="logs-toolbar-actions">
+                        <button class="logs-btn" id="log-toggle-scroll" title="Toggle auto-scroll">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+                            Auto-scroll
+                        </button>
+                        <button class="logs-btn" id="log-clear" title="Clear all logs">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Log Entries -->
+                <div class="logs-viewport" id="logs-viewport">
+                    <div class="logs-empty" id="logs-empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="40" height="40"><path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <span>Waiting for log events...</span>
+                    </div>
+                </div>
+
+                <!-- Status Bar -->
+                <div class="logs-statusbar">
+                    <div class="logs-statusbar-left">
+                        <span class="logs-ws-indicator" id="logs-ws-indicator">
+                            <span class="logs-ws-dot"></span> Connected
+                        </span>
+                        <span class="logs-status-sep">|</span>
+                        <span><span id="logs-shown-count">0</span> shown</span>
+                    </div>
+                    <div class="logs-statusbar-right">
+                        <span id="logs-scroll-label">Auto-scroll ON</span>
+                    </div>
                 </div>
             </div>
         </main>
