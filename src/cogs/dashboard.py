@@ -480,7 +480,8 @@ class DashboardCog(commands.Cog):
         data = []
         for u in users:
             d = dict(u)
-            d["formatted_id"] = str(d["id"])
+            d["id"] = str(d["id"])
+            d["formatted_id"] = d["id"]
             data.append(d)
         return web.json_response({"users": data})
 
