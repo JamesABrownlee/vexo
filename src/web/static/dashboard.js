@@ -10,6 +10,7 @@ const API = {
     library: '/api/library',
     topSongs: '/api/analytics/top-songs',
     userPrefs: (id) => `/api/users/${id}/preferences`,
+    userDetail: (id) => `/api/users/${id}/detail`,
     notifications: '/api/notifications',
     settings_global: '/api/settings/global',
     leave_guild: (id) => `/api/guilds/${id}/leave`,
@@ -80,6 +81,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Log UI initialization
     initLogControls();
+
+    // User detail modal - close on overlay click
+    const userModal = document.getElementById('user-detail-modal');
+    if (userModal) {
+        userModal.addEventListener('click', (e) => {
+            if (e.target === userModal) closeUserDetail();
+        });
+    }
 
     // Command palette initialization
     initCommandPalette();
@@ -1043,7 +1052,7 @@ function updateUserDirectory(users) {
     }
 
     list.innerHTML = users.map(u => `
-        <div class="user-item">
+        <div class="user-item user-item-clickable" onclick="viewUser('${u.id}')">
             <div class="user-avatar">${(u.username || '?').charAt(0)}</div>
             <div class="user-info">
                 <div class="user-name">${u.username || 'Unknown'}</div>
@@ -1102,7 +1111,142 @@ function selectGuild(e, id) {
     if (e && e.currentTarget) e.currentTarget.classList.add('active');
 }
 
-function viewUser(id) { console.log('View user', id); }
+async function viewUser(id) {
+    const modal = document.getElementById('user-detail-modal');
+    const loading = document.getElementById('user-detail-loading');
+    const content = document.getElementById('user-detail-content');
+    if (!modal) return;
+
+    // Show modal with loading state
+    modal.classList.add('open');
+    loading.style.display = 'flex';
+    content.style.display = 'none';
+
+    try {
+        const res = await fetch(API.userDetail(id));
+        if (!res.ok) throw new Error('Failed to fetch user');
+        const data = await res.json();
+        renderUserDetail(data);
+        loading.style.display = 'none';
+        content.style.display = 'block';
+    } catch (e) {
+        console.error('Failed to load user detail', e);
+        loading.innerHTML = '<span style="color: var(--error);">Failed to load user data</span>';
+    }
+}
+
+function closeUserDetail() {
+    const modal = document.getElementById('user-detail-modal');
+    if (modal) modal.classList.remove('open');
+}
+
+function renderUserDetail(data) {
+    const user = data.user;
+    const stats = data.stats;
+
+    // Avatar
+    const avatar = document.getElementById('ud-avatar');
+    avatar.textContent = (user.username || '?').charAt(0).toUpperCase();
+
+    // Name & ID
+    document.getElementById('ud-name').textContent = user.username || 'Unknown User';
+    document.getElementById('ud-id').textContent = 'ID: ' + user.id;
+
+    // Badges
+    const badges = document.getElementById('ud-badges');
+    let badgeHtml = '';
+    if (user.is_banned) badgeHtml += '<span class="ud-badge ud-badge-banned">Banned</span>';
+    if (user.opted_out) badgeHtml += '<span class="ud-badge ud-badge-optout">Opted Out</span>';
+    badges.innerHTML = badgeHtml;
+
+    // Stats
+    document.getElementById('ud-plays').textContent = stats.plays || 0;
+    document.getElementById('ud-reactions').textContent = stats.reactions || 0;
+    document.getElementById('ud-playlists').textContent = stats.playlists || 0;
+
+    // Meta (timestamps)
+    const meta = document.getElementById('ud-meta');
+    let metaHtml = '';
+    if (user.created_at) metaHtml += `<div class="ud-meta-item"><span class="ud-meta-label">First seen</span><span class="ud-meta-value">${new Date(user.created_at).toLocaleDateString()}</span></div>`;
+    if (user.last_active) metaHtml += `<div class="ud-meta-item"><span class="ud-meta-label">Last active</span><span class="ud-meta-value">${new Date(user.last_active).toLocaleDateString()}</span></div>`;
+    meta.innerHTML = metaHtml;
+
+    // Preferences
+    const prefsSection = document.getElementById('ud-prefs-section');
+    const prefsEl = document.getElementById('ud-prefs');
+    if (data.preferences && Object.keys(data.preferences).length > 0) {
+        prefsSection.style.display = 'block';
+        let prefsHtml = '';
+        for (const [type, prefs] of Object.entries(data.preferences)) {
+            const entries = Object.entries(prefs).slice(0, 5);
+            if (entries.length === 0) continue;
+            prefsHtml += `<div class="ud-pref-group"><h4 class="ud-pref-type">${type.charAt(0).toUpperCase() + type.slice(1)}</h4>`;
+            prefsHtml += entries.map(([key, score]) => {
+                const pct = Math.min(Math.round(score), 100);
+                return `<div class="ud-pref-item"><span class="ud-pref-key">${escapeHtml(key)}</span><div class="ud-pref-bar"><div class="ud-pref-bar-fill" style="width: ${pct}%"></div></div><span class="ud-pref-score">${Math.round(score)}</span></div>`;
+            }).join('');
+            prefsHtml += '</div>';
+        }
+        prefsEl.innerHTML = prefsHtml;
+    } else {
+        prefsSection.style.display = 'none';
+    }
+
+    // Recent songs
+    const songsSection = document.getElementById('ud-songs-section');
+    const songsEl = document.getElementById('ud-songs');
+    if (data.recent_songs && data.recent_songs.length > 0) {
+        songsSection.style.display = 'block';
+        songsEl.innerHTML = data.recent_songs.map(s => `
+            <div class="ud-song-item">
+                <div class="ud-song-info">
+                    <span class="ud-song-title">${escapeHtml(s.title)}</span>
+                    <span class="ud-song-artist">${escapeHtml(s.artist_name || 'Unknown')}</span>
+                </div>
+                <span class="ud-song-time">${s.played_at ? new Date(s.played_at).toLocaleDateString() : ''}</span>
+            </div>
+        `).join('');
+    } else {
+        songsSection.style.display = 'none';
+    }
+
+    // Liked songs
+    const likedSection = document.getElementById('ud-liked-section');
+    const likedEl = document.getElementById('ud-liked');
+    if (data.liked_songs && data.liked_songs.length > 0) {
+        likedSection.style.display = 'block';
+        likedEl.innerHTML = data.liked_songs.map(s => {
+            const icon = s.reaction === 'like' ? '&#10084;' : s.reaction === 'love' ? '&#128150;' : s.reaction === 'dislike' ? '&#128078;' : '';
+            return `
+                <div class="ud-song-item">
+                    <div class="ud-song-info">
+                        <span class="ud-song-title">${escapeHtml(s.title)}</span>
+                        <span class="ud-song-artist">${escapeHtml(s.artist_name || 'Unknown')}</span>
+                    </div>
+                    <span class="ud-reaction-badge">${icon}</span>
+                </div>
+            `;
+        }).join('');
+    } else {
+        likedSection.style.display = 'none';
+    }
+
+    // Imported playlists
+    const playlistsSection = document.getElementById('ud-playlists-section');
+    const playlistsEl = document.getElementById('ud-imported-playlists');
+    if (data.imported_playlists && data.imported_playlists.length > 0) {
+        playlistsSection.style.display = 'block';
+        playlistsEl.innerHTML = data.imported_playlists.map(p => `
+            <div class="ud-playlist-item">
+                <span class="ud-playlist-platform">${escapeHtml(p.platform || 'Unknown')}</span>
+                <span class="ud-playlist-name">${escapeHtml(p.playlist_name || 'Untitled')}</span>
+                <span class="ud-playlist-tracks">${p.track_count || 0} tracks</span>
+            </div>
+        `).join('');
+    } else {
+        playlistsSection.style.display = 'none';
+    }
+}
 
 function control(action) {
     if (currentGuild) {
@@ -1299,6 +1443,10 @@ function initCommandPalette() {
         }
         if (e.key === 'Escape' && modal.classList.contains('open')) {
             closeCommandPalette();
+        }
+        if (e.key === 'Escape') {
+            const userModal = document.getElementById('user-detail-modal');
+            if (userModal && userModal.classList.contains('open')) closeUserDetail();
         }
     });
 

@@ -2168,6 +2168,383 @@ body::before {
     color: var(--error);
 }
 
+/* ============================================================
+   USER DETAIL MODAL
+   ============================================================ */
+.user-item-clickable {
+    cursor: pointer;
+}
+
+.user-item-clickable:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--border-hover);
+}
+
+.user-detail-panel {
+    width: 100%;
+    max-width: 580px;
+    max-height: 85vh;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg), var(--shadow-glow);
+    overflow-y: auto;
+    position: relative;
+    transform: scale(0.98) translateY(-10px);
+    transition: var(--transition-normal);
+}
+
+.modal-overlay.open .user-detail-panel {
+    transform: scale(1) translateY(0);
+}
+
+.user-detail-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-glass);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-secondary);
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    z-index: 10;
+}
+
+.user-detail-close:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.user-detail-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 4rem 2rem;
+    color: var(--text-muted);
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.user-detail-content {
+    padding: 1.75rem;
+}
+
+/* Header */
+.user-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.user-detail-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: var(--gradient-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    color: white;
+}
+
+.user-detail-identity {
+    flex: 1;
+    min-width: 0;
+}
+
+.user-detail-name {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin-bottom: 0.15rem;
+}
+
+.user-detail-id {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.user-detail-badges {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+}
+
+.ud-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.ud-badge-banned {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error);
+}
+
+.ud-badge-optout {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--warning);
+}
+
+/* Stats Row */
+.user-detail-stats {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.ud-stat {
+    flex: 1;
+    background: var(--bg-glass);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.ud-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    background: var(--gradient-accent);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.ud-stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Meta (timestamps) */
+.user-detail-meta {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.ud-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.ud-meta-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ud-meta-value {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+/* Sections */
+.user-detail-section {
+    margin-bottom: 1.25rem;
+}
+
+.ud-section-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Preferences */
+.ud-prefs-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.ud-pref-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.ud-pref-type {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.15rem;
+}
+
+.ud-pref-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.ud-pref-key {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    min-width: 100px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ud-pref-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.ud-pref-bar-fill {
+    height: 100%;
+    background: var(--gradient-accent);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.ud-pref-score {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    min-width: 28px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Songs Lists */
+.ud-songs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.ud-song-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: var(--radius-sm);
+    transition: var(--transition-fast);
+}
+
+.ud-song-item:hover {
+    background: var(--bg-card);
+}
+
+.ud-song-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.ud-song-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ud-song-artist {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.ud-song-time {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.ud-reaction-badge {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+/* Playlists */
+.ud-playlists-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.ud-playlist-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: var(--radius-sm);
+}
+
+.ud-playlist-item:hover {
+    background: var(--bg-card);
+}
+
+.ud-playlist-platform {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(139, 92, 246, 0.1);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+}
+
+.ud-playlist-name {
+    flex: 1;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ud-playlist-tracks {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
 /* Charts */
 .bento-chart {
     grid-column: span 6;

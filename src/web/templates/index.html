@@ -634,6 +634,71 @@
     </main>
     </div>
 
+    <!-- User Detail Modal -->
+    <div class="modal-overlay" id="user-detail-modal">
+        <div class="user-detail-panel">
+            <button class="user-detail-close" onclick="closeUserDetail()">&times;</button>
+            <div class="user-detail-loading" id="user-detail-loading">
+                <div class="spinner"></div>
+                <span>Loading user data...</span>
+            </div>
+            <div class="user-detail-content" id="user-detail-content" style="display: none;">
+                <!-- Header -->
+                <div class="user-detail-header">
+                    <div class="user-detail-avatar" id="ud-avatar"></div>
+                    <div class="user-detail-identity">
+                        <h2 class="user-detail-name" id="ud-name"></h2>
+                        <span class="user-detail-id" id="ud-id"></span>
+                        <div class="user-detail-badges" id="ud-badges"></div>
+                    </div>
+                </div>
+
+                <!-- Stats Row -->
+                <div class="user-detail-stats">
+                    <div class="ud-stat">
+                        <span class="ud-stat-value" id="ud-plays">0</span>
+                        <span class="ud-stat-label">Plays</span>
+                    </div>
+                    <div class="ud-stat">
+                        <span class="ud-stat-value" id="ud-reactions">0</span>
+                        <span class="ud-stat-label">Reactions</span>
+                    </div>
+                    <div class="ud-stat">
+                        <span class="ud-stat-value" id="ud-playlists">0</span>
+                        <span class="ud-stat-label">Playlists</span>
+                    </div>
+                </div>
+
+                <!-- Timestamps -->
+                <div class="user-detail-meta" id="ud-meta"></div>
+
+                <!-- Preferences -->
+                <div class="user-detail-section" id="ud-prefs-section" style="display: none;">
+                    <h3 class="ud-section-title">Preferences</h3>
+                    <div class="ud-prefs-grid" id="ud-prefs"></div>
+                </div>
+
+                <!-- Recent Songs -->
+                <div class="user-detail-section" id="ud-songs-section" style="display: none;">
+                    <h3 class="ud-section-title">Recent Songs</h3>
+                    <div class="ud-songs-list" id="ud-songs"></div>
+                </div>
+
+                <!-- Liked Songs -->
+                <div class="user-detail-section" id="ud-liked-section" style="display: none;">
+                    <h3 class="ud-section-title">Liked Songs</h3>
+                    <div class="ud-songs-list" id="ud-liked"></div>
+                </div>
+
+                <!-- Imported Playlists -->
+                <div class="user-detail-section" id="ud-playlists-section" style="display: none;">
+                    <h3 class="ud-section-title">Imported Playlists</h3>
+                    <div class="ud-playlists-list" id="ud-imported-playlists"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Command Palette Modal -->
     <div class="modal-overlay" id="search-modal">
         <div class="command-palette">

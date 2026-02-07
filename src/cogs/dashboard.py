@@ -169,6 +169,7 @@ class DashboardCog(commands.Cog):
         self.app.router.add_get("/api/library", self._handle_library)
         self.app.router.add_get("/api/users", self._handle_users)
         self.app.router.add_get("/api/users/{user_id}/preferences", self._handle_user_prefs)
+        self.app.router.add_get("/api/users/{user_id}/detail", self._handle_user_detail)
         self.app.router.add_get("/ws/logs", self._handle_websocket)
         
         # Global & System
@@ -568,6 +569,97 @@ class DashboardCog(commands.Cog):
         return web.json_response({"library": library})
 
     
+    async def _handle_user_detail(self, request: web.Request) -> web.Response:
+        """Get detailed info for a single user."""
+        user_id = int(request.match_info["user_id"])
+        if not hasattr(self.bot, "db"):
+            return web.json_response({"error": "No database"}, status=503)
+
+        # Basic user info
+        user = await self.bot.db.fetch_one(
+            "SELECT id, username, created_at, last_active, is_banned, opted_out FROM users WHERE id = ?",
+            (user_id,),
+        )
+        if not user:
+            return web.json_response({"error": "User not found"}, status=404)
+
+        user_data = dict(user)
+        user_data["id"] = str(user_data["id"])
+        for key in ("created_at", "last_active"):
+            val = user_data.get(key)
+            if val and hasattr(val, "isoformat"):
+                user_data[key] = val.isoformat()
+
+        # Activity stats
+        plays_row = await self.bot.db.fetch_one(
+            "SELECT COUNT(*) as count FROM playback_history WHERE for_user_id = ?",
+            (user_id,),
+        )
+        reactions_row = await self.bot.db.fetch_one(
+            "SELECT COUNT(*) as count FROM song_reactions WHERE user_id = ?",
+            (user_id,),
+        )
+        playlists_row = await self.bot.db.fetch_one(
+            "SELECT COUNT(*) as count FROM imported_playlists WHERE user_id = ?",
+            (user_id,),
+        )
+
+        # Recent songs requested
+        recent_songs = await self.bot.db.fetch_all(
+            """SELECT s.title, s.artist_name, ph.played_at, ph.discovery_source
+               FROM playback_history ph
+               JOIN songs s ON ph.song_id = s.id
+               WHERE ph.for_user_id = ?
+               ORDER BY ph.played_at DESC LIMIT 10""",
+            (user_id,),
+        )
+        songs_data = []
+        for s in recent_songs:
+            d = dict(s)
+            if d.get("played_at") and hasattr(d["played_at"], "isoformat"):
+                d["played_at"] = d["played_at"].isoformat()
+            songs_data.append(d)
+
+        # Reactions (liked/disliked songs)
+        liked_songs = await self.bot.db.fetch_all(
+            """SELECT s.title, s.artist_name, sr.reaction
+               FROM song_reactions sr
+               JOIN songs s ON sr.song_id = s.id
+               WHERE sr.user_id = ?
+               ORDER BY sr.created_at DESC LIMIT 20""",
+            (user_id,),
+        )
+
+        # Top preferences
+        from src.database.crud import PreferenceCRUD
+        pref_crud = PreferenceCRUD(self.bot.db)
+        preferences = await pref_crud.get_all_preferences(user_id)
+
+        # Imported playlists
+        playlists = await self.bot.db.fetch_all(
+            "SELECT platform, playlist_name, track_count, imported_at FROM imported_playlists WHERE user_id = ? ORDER BY imported_at DESC LIMIT 10",
+            (user_id,),
+        )
+        playlists_data = []
+        for p in playlists:
+            d = dict(p)
+            if d.get("imported_at") and hasattr(d["imported_at"], "isoformat"):
+                d["imported_at"] = d["imported_at"].isoformat()
+            playlists_data.append(d)
+
+        return web.json_response({
+            "user": user_data,
+            "stats": {
+                "plays": plays_row["count"] if plays_row else 0,
+                "reactions": reactions_row["count"] if reactions_row else 0,
+                "playlists": playlists_row["count"] if playlists_row else 0,
+            },
+            "recent_songs": songs_data,
+            "liked_songs": [dict(s) for s in liked_songs],
+            "preferences": preferences,
+            "imported_playlists": playlists_data,
+        })
+
     async def _handle_user_prefs(self, request: web.Request) -> web.Response:
         user_id = int(request.match_info["user_id"])
         if not hasattr(self.bot, "db"):
