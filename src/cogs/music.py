@@ -71,110 +71,150 @@ class NowPlayingView(discord.ui.View):
         super().__init__(timeout=300)  # 5 minute timeout
         self.cog = cog
         self.guild_id = guild_id
+
+    async def _safe_defer(self, interaction: discord.Interaction, *, ephemeral: bool = True) -> bool:
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=ephemeral)
+            return True
+        except discord.InteractionResponded:
+            return True
+        except discord.NotFound:
+            return False
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "Failed to defer NowPlayingView interaction", error=str(e))
+            return False
+
+    async def _safe_send(self, interaction: discord.Interaction, content: str, *, ephemeral: bool = True) -> None:
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(content, ephemeral=ephemeral)
+            else:
+                await interaction.response.send_message(content, ephemeral=ephemeral)
+        except discord.NotFound:
+            return
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "Failed to send NowPlayingView response", error=str(e))
+            return
     
     @discord.ui.button(emoji="⏸️", style=discord.ButtonStyle.secondary)
     async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
-        player = self.cog.get_player(self.guild_id)
-        if player.voice_client:
-            if player.voice_client.is_playing():
-                player.voice_client.pause()
-                button.emoji = "▶️"
-                await interaction.response.edit_message(view=self)
-            elif player.voice_client.is_paused():
-                player.voice_client.resume()
-                button.emoji = "⏸️"
-                await interaction.response.edit_message(view=self)
-            else:
-                await interaction.response.defer()
-        else:
-            await interaction.response.defer()
+        if not await self._safe_defer(interaction, ephemeral=False):
+            return
+
+        try:
+            player = self.cog.get_player(self.guild_id)
+            if player.voice_client:
+                if player.voice_client.is_playing():
+                    player.voice_client.pause()
+                    button.emoji = "▶️"
+                elif player.voice_client.is_paused():
+                    player.voice_client.resume()
+                    button.emoji = "⏸️"
+
+            try:
+                await interaction.edit_original_response(view=self)
+            except discord.NotFound:
+                return
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "NowPlayingView pause/resume failed", error=str(e))
+            return
     
     @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger)
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
-        player = self.cog.get_player(self.guild_id)
-        if player.voice_client:
-            # Clear queue
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
+
+        try:
+            player = self.cog.get_player(self.guild_id)
+            if not player.voice_client:
+                return
+
             while not player.queue.empty():
                 try:
                     player.queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            
-            # Stop playing (this will break the loop in _play_loop)
+
             if player.is_playing or player.voice_client.is_playing():
                 player.voice_client.stop()
-            
-            # Disconnect
+
             await player.voice_client.disconnect()
             player.voice_client = None
-            
-            await interaction.response.send_message("⏹️ Stopped and cleared queue!", ephemeral=True)
+
+            await self._safe_send(interaction, "⏹️ Stopped and cleared queue!", ephemeral=True)
             self.stop()  # Stop listening for interactions
-        else:
-            await interaction.response.defer()
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "NowPlayingView stop failed", error=str(e))
+            return
     
     @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        player = self.cog.get_player(self.guild_id)
-        if player.voice_client and player.is_playing:
-            player.voice_client.stop()
-            await interaction.response.send_message("⏭️ Skipped!", ephemeral=True)
-        else:
-            await interaction.response.defer()
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
+
+        try:
+            player = self.cog.get_player(self.guild_id)
+            if player.voice_client and player.is_playing:
+                player.voice_client.stop()
+                await self._safe_send(interaction, "⏭️ Skipped!", ephemeral=True)
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "NowPlayingView skip failed", error=str(e))
+            return
     
     @discord.ui.button(emoji="❤️", style=discord.ButtonStyle.secondary)
     async def like(self, interaction: discord.Interaction, button: discord.ui.Button):
-        player = self.cog.get_player(self.guild_id)
-        if player.current:
-            # Database: Log Reaction
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
+
+        try:
+            player = self.cog.get_player(self.guild_id)
+            if not player.current:
+                return
+
             if hasattr(self.cog.bot, "db") and self.cog.bot.db and player.current.song_db_id:
                 try:
                     song_crud = SongCRUD(self.cog.bot.db)
                     reaction_crud = ReactionCRUD(self.cog.bot.db)
-                    
-                    # Make permanent if it was ephemeral
-                    await song_crud.make_permanent(player.current.song_db_id)
 
-                    # Log reaction
+                    await song_crud.make_permanent(player.current.song_db_id)
                     await reaction_crud.add_reaction(interaction.user.id, player.current.song_db_id, "like")
-                    
-                    # Library: Record as 'like'
+
                     from src.database.crud import LibraryCRUD
                     lib_crud = LibraryCRUD(self.cog.bot.db)
                     await lib_crud.add_to_library(interaction.user.id, player.current.song_db_id, "like")
                 except Exception as e:
                     log.error_cat(Category.USER, "Failed to log like", error=str(e))
-            
-            await interaction.response.send_message(
-                f"❤️ Liked **{player.current.title}**!",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.defer()
+
+            await self._safe_send(interaction, f"❤️ Liked **{player.current.title}**!", ephemeral=True)
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "NowPlayingView like failed", error=str(e))
+            return
     
     @discord.ui.button(emoji="👎", style=discord.ButtonStyle.secondary)
     async def dislike(self, interaction: discord.Interaction, button: discord.ui.Button):
-        player = self.cog.get_player(self.guild_id)
-        if player.current:
-            # Database: Log Reaction
+        if not await self._safe_defer(interaction, ephemeral=True):
+            return
+
+        try:
+            player = self.cog.get_player(self.guild_id)
+            if not player.current:
+                return
+
             if hasattr(self.cog.bot, "db") and self.cog.bot.db and player.current.song_db_id:
                 try:
                     song_crud = SongCRUD(self.cog.bot.db)
                     reaction_crud = ReactionCRUD(self.cog.bot.db)
-                    
-                    # Make permanent (even disliking counts as interaction so we keep record)
-                    await song_crud.make_permanent(player.current.song_db_id)
 
+                    await song_crud.make_permanent(player.current.song_db_id)
                     await reaction_crud.add_reaction(interaction.user.id, player.current.song_db_id, "dislike")
                 except Exception as e:
                     log.error_cat(Category.USER, "Failed to log dislike", error=str(e))
-            
-            await interaction.response.send_message(
-                f"👎 Disliked **{player.current.title}**",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.defer()
+
+            await self._safe_send(interaction, f"👎 Disliked **{player.current.title}**", ephemeral=True)
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "NowPlayingView dislike failed", error=str(e))
+            return
 
 
 class MusicCog(commands.Cog):
@@ -231,6 +271,30 @@ class MusicCog(commands.Cog):
                 await player.voice_client.disconnect(force=True)
         
         log.event(Category.SYSTEM, Event.COG_UNLOADED, cog="music")
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Catch unhandled app command errors for this cog so they don't get silently swallowed."""
+        try:
+            log.exception_cat(
+                Category.SYSTEM,
+                "App command error in MusicCog",
+                error=str(error),
+                command=getattr(interaction.command, "qualified_name", None),
+                guild_id=getattr(interaction, "guild_id", None),
+                user_id=getattr(getattr(interaction, "user", None), "id", None),
+            )
+        except Exception:
+            pass
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Something went wrong running that command.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Something went wrong running that command.", ephemeral=True)
+        except discord.NotFound:
+            return
+        except Exception:
+            return
     
     def get_player(self, guild_id: int) -> GuildPlayer:
         """Get or create a player for a guild."""
@@ -246,7 +310,16 @@ class MusicCog(commands.Cog):
     @app_commands.describe(query="Song name or search query")
     async def play_song(self, interaction: discord.Interaction, query: str):
         """Search for a song and add it to the queue."""
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.InteractionResponded:
+            pass
+        except discord.NotFound:
+            log.warning_cat(Category.SYSTEM, "Interaction expired/unknown (404) in play_song", query=query)
+            return
+        except Exception as e:
+            log.exception_cat(Category.SYSTEM, "Failed to defer interaction in play_song", error=str(e), query=query)
+            return
         
         # Check if user is in a voice channel
         if not interaction.user.voice:
