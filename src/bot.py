@@ -136,25 +136,10 @@ class MusicBot(commands.Bot):
             except Exception:
                 pass
 
-        try:
-            return await super().on_interaction(interaction)
-        except Exception as e:
-            # Prevent "Ignoring exception in on_interaction" without losing the error.
-            try:
-                log.exception_cat(
-                    Category.SYSTEM,
-                    "on_interaction_error",
-                    module=__name__,
-                    interaction_id=getattr(interaction, "id", None),
-                    interaction_type=str(getattr(getattr(interaction, "type", None), "name", getattr(interaction, "type", None))),
-                    guild_id=getattr(interaction, "guild_id", None),
-                    channel_id=getattr(getattr(interaction, "channel", None), "id", None),
-                    user_id=getattr(getattr(interaction, "user", None), "id", None),
-                    error=self._truncate(e),
-                )
-            except Exception:
-                pass
-            return None
+        # In this codebase/library, interactions are processed by the internal machinery
+        # (app command tree + component dispatch). The on_interaction event is for observation,
+        # and calling super().on_interaction is not required (and may not exist depending on the discord lib).
+        return None
 
     async def on_app_command_completion(self, interaction: discord.Interaction, command) -> None:
         t0 = self._interaction_started.pop(getattr(interaction, "id", 0), None)
