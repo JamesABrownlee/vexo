@@ -30,6 +30,7 @@ class NowPlayingView(discord.ui.View):
     def __init__(self, bot: commands.Bot, queue_items: list = None):
         super().__init__(timeout=None)
         self.bot = bot
+        self._busy_lock = asyncio.Lock()
 
         # Add select menu with queue items if provided.
         # Note: discord.py adds decorator-defined children during View.__init__.
@@ -65,6 +66,21 @@ class NowPlayingView(discord.ui.View):
     @property
     def music(self):
         return self.bot.get_cog("MusicCog")
+
+    async def _set_all_disabled(self, disabled: bool, interaction: discord.Interaction | None = None) -> None:
+        for item in self.children:
+            try:
+                item.disabled = disabled
+            except Exception:
+                pass
+
+        if interaction is not None:
+            try:
+                msg = getattr(interaction, "message", None)
+                if msg is not None:
+                    await msg.edit(view=self)
+            except Exception:
+                pass
 
     def _guild_id_from_interaction(self, interaction: discord.Interaction) -> int | None:
         try:
@@ -139,18 +155,26 @@ class NowPlayingView(discord.ui.View):
             await self._safe_send(interaction, "❌ This button can only be used in a server.", ephemeral=True)
             return
 
-        try:
-            player = music.get_player(guild_id)
-            if player.voice_client:
-                if player.voice_client.is_playing():
-                    player.voice_client.pause()
-                    await self._safe_send(interaction, "⏸ Paused", ephemeral=True)
-                elif player.voice_client.is_paused():
-                    player.voice_client.resume()
-                    await self._safe_send(interaction, "▶ Resumed", ephemeral=True)
-        except Exception as e:
-            log.exception_cat(Category.SYSTEM, "NowPlayingView pause/resume failed", error=str(e))
+        if self._busy_lock.locked():
+            await self._safe_send(interaction, "⏳ Bot is busy — try again in a moment.", ephemeral=True)
             return
+
+        async with self._busy_lock:
+            await self._set_all_disabled(True, interaction)
+            try:
+                player = music.get_player(guild_id)
+                if player.voice_client:
+                    if player.voice_client.is_playing():
+                        player.voice_client.pause()
+                        await self._safe_send(interaction, "⏸ Paused", ephemeral=True)
+                    elif player.voice_client.is_paused():
+                        player.voice_client.resume()
+                        await self._safe_send(interaction, "▶ Resumed", ephemeral=True)
+            except Exception as e:
+                log.exception_cat(Category.SYSTEM, "NowPlayingView pause/resume failed", error=str(e))
+                return
+            finally:
+                await self._set_all_disabled(False, interaction)
 
     @discord.ui.button(emoji="⏹", style=discord.ButtonStyle.danger, custom_id="np:stop")
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -177,28 +201,35 @@ class NowPlayingView(discord.ui.View):
             await self._safe_send(interaction, "❌ This button can only be used in a server.", ephemeral=True)
             return
 
-        try:
-            player = music.get_player(guild_id)
-            if not player.voice_client:
-                return
-
-            while not player.queue.empty():
-                try:
-                    player.queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-
-            if player.is_playing or player.voice_client.is_playing():
-                player.voice_client.stop()
-
-            await player.voice_client.disconnect()
-            player.voice_client = None
-
-            await self._safe_send(interaction, "⏹ Stopped and cleared queue!", ephemeral=True)
-            discord.ui.View.stop(self)
-        except Exception as e:
-            log.exception_cat(Category.SYSTEM, "NowPlayingView stop failed", error=str(e))
+        if self._busy_lock.locked():
+            await self._safe_send(interaction, "⏳ Bot is busy — try again in a moment.", ephemeral=True)
             return
+
+        async with self._busy_lock:
+            await self._set_all_disabled(True, interaction)
+            try:
+                player = music.get_player(guild_id)
+                if not player.voice_client:
+                    return
+
+                while not player.queue.empty():
+                    try:
+                        player.queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                if player.is_playing or player.voice_client.is_playing():
+                    player.voice_client.stop()
+
+                await player.voice_client.disconnect()
+                player.voice_client = None
+
+                await self._safe_send(interaction, "⏹ Stopped and cleared queue!", ephemeral=True)
+                # Keep disabled until a new Now Playing message is posted.
+                await self._set_all_disabled(True, interaction)
+            except Exception as e:
+                log.exception_cat(Category.SYSTEM, "NowPlayingView stop failed", error=str(e))
+                return
 
     @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary, custom_id="np:skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -225,14 +256,22 @@ class NowPlayingView(discord.ui.View):
             await self._safe_send(interaction, "❌ This button can only be used in a server.", ephemeral=True)
             return
 
-        try:
-            player = music.get_player(guild_id)
-            if player.voice_client and player.is_playing:
-                player.voice_client.stop()
-                await self._safe_send(interaction, "⏭️ Skipped!", ephemeral=True)
-        except Exception as e:
-            log.exception_cat(Category.SYSTEM, "NowPlayingView skip failed", error=str(e))
+        if self._busy_lock.locked():
+            await self._safe_send(interaction, "⏳ Bot is busy — try again in a moment.", ephemeral=True)
             return
+
+        async with self._busy_lock:
+            await self._set_all_disabled(True, interaction)
+            try:
+                player = music.get_player(guild_id)
+                if player.voice_client and player.is_playing:
+                    player.voice_client.stop()
+                    await self._safe_send(interaction, "⏭️ Skipped!", ephemeral=True)
+            except Exception as e:
+                log.exception_cat(Category.SYSTEM, "NowPlayingView skip failed", error=str(e))
+                return
+            finally:
+                await self._set_all_disabled(False, interaction)
 
     @discord.ui.button(emoji="❤️", style=discord.ButtonStyle.secondary, custom_id="np:like")
     async def like(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -258,6 +297,13 @@ class NowPlayingView(discord.ui.View):
         if not guild_id:
             await self._safe_send(interaction, "❌ This button can only be used in a server.", ephemeral=True)
             return
+
+        if self._busy_lock.locked():
+            await self._safe_send(interaction, "⏳ Bot is busy — try again in a moment.", ephemeral=True)
+            return
+
+        async with self._busy_lock:
+            await self._set_all_disabled(True, interaction)
 
         try:
             player = music.get_player(guild_id)
@@ -285,6 +331,8 @@ class NowPlayingView(discord.ui.View):
         except Exception as e:
             log.exception_cat(Category.SYSTEM, "NowPlayingView like failed", error=str(e))
             return
+        finally:
+            await self._set_all_disabled(False, interaction)
 
     @discord.ui.button(emoji="👎", style=discord.ButtonStyle.secondary, custom_id="np:dislike")
     async def dislike(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -311,6 +359,13 @@ class NowPlayingView(discord.ui.View):
             await self._safe_send(interaction, "❌ This button can only be used in a server.", ephemeral=True)
             return
 
+        if self._busy_lock.locked():
+            await self._safe_send(interaction, "⏳ Bot is busy — try again in a moment.", ephemeral=True)
+            return
+
+        async with self._busy_lock:
+            await self._set_all_disabled(True, interaction)
+
         try:
             player = music.get_player(guild_id)
             current = player.current
@@ -334,6 +389,8 @@ class NowPlayingView(discord.ui.View):
         except Exception as e:
             log.exception_cat(Category.SYSTEM, "NowPlayingView dislike failed", error=str(e))
             return
+        finally:
+            await self._set_all_disabled(False, interaction)
 
     async def skip_to_callback(self, interaction: discord.Interaction):
         """Skip to a specific song in the queue (callback for dynamic select)."""
@@ -358,6 +415,13 @@ class NowPlayingView(discord.ui.View):
             await self._safe_send(interaction, "❌ This can only be used in a server.", ephemeral=True)
             return
 
+        if self._busy_lock.locked():
+            await self._safe_send(interaction, "⏳ Bot is busy — try again in a moment.", ephemeral=True)
+            return
+
+        async with self._busy_lock:
+            await self._set_all_disabled(True, interaction)
+
         try:
             player = music.get_player(guild_id)
             # Selected value is present in interaction.data['values']
@@ -381,6 +445,8 @@ class NowPlayingView(discord.ui.View):
         except Exception as e:
             log.exception_cat(Category.SYSTEM, "NowPlayingView skip_to failed", error=str(e))
             await self._safe_send(interaction, "❌ Error skipping to song.", ephemeral=True)
+        finally:
+            await self._set_all_disabled(False, interaction)
 
 
 class NowPlayingCog(commands.Cog):
