@@ -387,6 +387,8 @@ class NowPlayingCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._persistent_view: NowPlayingView | None = None
+        self._sticky_bump_cooldown_s: int = 20
+        self._last_sticky_bump_at: dict[int, datetime] = {}
 
     @property
     def music(self):
@@ -451,8 +453,11 @@ class NowPlayingCog(commands.Cog):
                 except Exception:
                     pass
 
-    async def send_now_playing_for_player(self, player) -> None:
-        """Post a Now Playing view immediately with a loading embed, then swap to the image when ready."""
+    async def send_now_playing_for_player(self, player, *, repost: bool = False) -> None:
+        """Post a Now Playing view immediately with a loading embed, then swap to the image when ready.
+
+        If `repost=True`, tries to delete the existing Now Playing message and send a new one (to "bump" it).
+        """
         if not player.current or not player.text_channel_id:
             return
 
@@ -508,6 +513,18 @@ class NowPlayingCog(commands.Cog):
                 if msg is None and player.last_np_msg is not None:
                     msg = player.last_np_msg
 
+                # If we want to bump the message to the bottom, delete it and re-send.
+                if repost and msg is not None:
+                    try:
+                        await msg.delete()
+                    except discord.Forbidden:
+                        # Can't delete; fall back to edit-in-place.
+                        repost = False
+                    except Exception:
+                        repost = False
+                    else:
+                        msg = None
+
                 # Show loading state immediately.
                 if msg is not None:
                     try:
@@ -515,7 +532,7 @@ class NowPlayingCog(commands.Cog):
                             await msg.edit(embed=loading_embed, view=view, attachments=[])
                         except TypeError:
                             # Older libs may not support attachments= in edit.
-                            await msg.edit(embed=loading_embed, view=view)
+                            await msg.edit(content="<a:loadingload:1470532660781908081>", view=view)
                     except Exception:
                         msg = None
 
@@ -547,6 +564,42 @@ class NowPlayingCog(commands.Cog):
                 error=str(e),
                 guild_id=player.guild_id,
             )
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """Optional 'sticky' behaviour: bump Now Playing to the bottom by re-posting after users chat."""
+        try:
+            if not message.guild or message.author.bot:
+                return
+
+            music = self.music
+            if not music:
+                return
+
+            player = music.get_player(message.guild.id)
+            if not player.current or not player.text_channel_id or not player.is_playing:
+                return
+
+            if message.channel.id != player.text_channel_id:
+                return
+
+            if not player.last_np_msg:
+                return
+
+            # If Now Playing is already the last message, nothing to do.
+            last_message_id = getattr(message.channel, "last_message_id", None)
+            if last_message_id and int(last_message_id) == int(player.last_np_msg.id):
+                return
+
+            now = datetime.now(UTC)
+            last = self._last_sticky_bump_at.get(message.guild.id)
+            if last and (now - last).total_seconds() < self._sticky_bump_cooldown_s:
+                return
+
+            self._last_sticky_bump_at[message.guild.id] = now
+            await self.send_now_playing_for_player(player, repost=True)
+        except Exception as e:
+            log.debug_cat(Category.SYSTEM, "sticky_now_playing_bump_failed", error=str(e))
 
     async def _swap_loading_to_image(self, *, guild_id: int, channel_id: int, message_id: int, video_id: str) -> None:
         """Fetch the dashboard-rendered image and edit the message to show it."""
