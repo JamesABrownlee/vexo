@@ -53,6 +53,88 @@ class DatabaseManager:
                     await db.commit()
                 except Exception as e:
                     logger.error(f"Migration failed: {e}")
+
+            # 2. Expand playback_history.discovery_source CHECK constraint (SQLite requires table rebuild).
+            desired_sources = ("user_request", "similar", "artist", "same_artist", "wildcard", "library")
+            try:
+                cur = await db.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='playback_history'"
+                )
+                row = await cur.fetchone()
+                create_sql = (row["sql"] if row and row["sql"] else "") if row is not None else ""
+
+                needs_migration = False
+                if create_sql:
+                    for src in desired_sources:
+                        if f"'{src}'" not in create_sql:
+                            needs_migration = True
+                            break
+                else:
+                    # If we can't read the create statement, don't attempt a risky rebuild.
+                    needs_migration = False
+
+                if needs_migration:
+                    logger.info("Migrating: Expanding playback_history.discovery_source constraint")
+
+                    # Verify expected columns exist before rebuilding.
+                    cur = await db.execute("PRAGMA table_info(playback_history)")
+                    cols = await cur.fetchall()
+                    col_names = [c["name"] for c in cols] if cols else []
+                    expected = [
+                        "id",
+                        "session_id",
+                        "song_id",
+                        "played_at",
+                        "completed",
+                        "skip_reason",
+                        "discovery_source",
+                        "discovery_reason",
+                        "for_user_id",
+                    ]
+                    if not all(name in set(col_names) for name in expected):
+                        logger.warning(
+                            "Skipping playback_history migration due to unexpected schema",
+                            extra={"found": col_names},
+                        )
+                    else:
+                        await db.execute("PRAGMA foreign_keys = OFF")
+                        await db.execute("BEGIN")
+                        try:
+                            await db.execute(
+                                """
+                                CREATE TABLE IF NOT EXISTS playback_history_new (
+                                    id INTEGER PRIMARY KEY,
+                                    session_id TEXT REFERENCES playback_sessions(id),
+                                    song_id INTEGER REFERENCES songs(id),
+                                    played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                    completed BOOLEAN DEFAULT FALSE,
+                                    skip_reason TEXT CHECK(skip_reason IN ('user', 'vote', 'error') OR skip_reason IS NULL),
+                                    discovery_source TEXT CHECK(discovery_source IN ('user_request', 'similar', 'artist', 'same_artist', 'wildcard', 'library')),
+                                    discovery_reason TEXT,
+                                    for_user_id INTEGER REFERENCES users(id)
+                                );
+                                """
+                            )
+                            await db.execute(
+                                """
+                                INSERT INTO playback_history_new
+                                    (id, session_id, song_id, played_at, completed, skip_reason, discovery_source, discovery_reason, for_user_id)
+                                SELECT
+                                    id, session_id, song_id, played_at, completed, skip_reason, discovery_source, discovery_reason, for_user_id
+                                FROM playback_history;
+                                """
+                            )
+                            await db.execute("DROP TABLE playback_history")
+                            await db.execute("ALTER TABLE playback_history_new RENAME TO playback_history")
+                            await db.commit()
+                            logger.info("Migration complete: playback_history constraint expanded")
+                        except Exception as e:
+                            await db.rollback()
+                            logger.error(f"Migration failed: {e}")
+                        finally:
+                            await db.execute("PRAGMA foreign_keys = ON")
+            except Exception as e:
+                logger.error(f"Migration check failed (playback_history): {e}")
     
     @asynccontextmanager
     async def connection(self) -> AsyncGenerator[aiosqlite.Connection, None]:
