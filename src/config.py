@@ -26,6 +26,7 @@ class Config:
     # Web Dashboard
     WEB_HOST: str
     WEB_PORT: int
+    WEB_ADMIN_TOKEN: str | None
     
     # Optional: YouTube cookies for age-restricted content
     YTDL_COOKIES_PATH: str | None
@@ -53,6 +54,7 @@ class Config:
             DATABASE_PATH=database_path,
             WEB_HOST=os.getenv("WEB_HOST", "127.0.0.1"),
             WEB_PORT=int(os.getenv("WEB_PORT", "8080")),
+            WEB_ADMIN_TOKEN=os.getenv("WEB_ADMIN_TOKEN"),
             YTDL_COOKIES_PATH=os.getenv("YTDL_COOKIES_PATH"),
             YTDL_PO_TOKEN=os.getenv("YTDL_PO_TOKEN"),
         )

@@ -1,10 +1,11 @@
 """
 Web Dashboard Cog - Modern analytics dashboard
-Runs on localhost only - no authentication required
+By default allows loopback requests only; optionally protect admin endpoints with WEB_ADMIN_TOKEN.
 """
 import asyncio
 import json
 import logging
+import os
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -126,6 +127,8 @@ class DashboardCog(commands.Cog):
         self.runner: web.AppRunner | None = None
         self.ws_manager = WebSocketManager()
         self._log_handler: WebSocketLogHandler | None = None
+        self._cog_admin_token = os.getenv("WEB_ADMIN_TOKEN")
+        self._cog_action_lock = asyncio.Lock()
     
     async def cog_load(self):
         self.app = web.Application()
@@ -171,12 +174,203 @@ class DashboardCog(commands.Cog):
         self.app.router.add_get("/api/users/{user_id}/preferences", self._handle_user_prefs)
         self.app.router.add_get("/api/users/{user_id}/detail", self._handle_user_detail)
         self.app.router.add_get("/ws/logs", self._handle_websocket)
+
+        # Cog management (Discord extensions under src.cogs.*)
+        self.app.router.add_get("/api/cogs", self._handle_cogs_list)
+        self.app.router.add_post("/api/cogs/actions/{action}", self._handle_cogs_bulk_action)
+        self.app.router.add_post("/api/cogs/{cog}/{action}", self._handle_cog_action)
         
         # Global & System
         self.app.router.add_get("/api/settings/global", self._handle_global_settings)
         self.app.router.add_post("/api/settings/global", self._handle_global_settings)
         self.app.router.add_get("/api/notifications", self._handle_notifications)
         self.app.router.add_post("/api/guilds/{guild_id}/leave", self._handle_leave_guild)
+
+    def _is_loopback(self, request: web.Request) -> bool:
+        remote = request.remote or ""
+        return remote in {"127.0.0.1", "::1"}
+
+    def _is_admin(self, request: web.Request) -> bool:
+        """Authorize cog management endpoints.
+
+        - If WEB_ADMIN_TOKEN is set: require header X-Admin-Token (or ?token=...).
+        - Otherwise: only allow loopback requests.
+        """
+        if self._cog_admin_token:
+            provided = request.headers.get("X-Admin-Token") or request.query.get("token")
+            return bool(provided) and provided == self._cog_admin_token
+
+        return self._is_loopback(request)
+
+    def _normalize_extension(self, cog_name: str) -> str | None:
+        """Convert user input to a safe extension module name under src.cogs.*."""
+        name = (cog_name or "").strip()
+        if not name:
+            return None
+
+        if name.endswith(".py"):
+            name = name[:-3]
+
+        module = name if "." in name else f"src.cogs.{name}"
+        if not module.startswith("src.cogs."):
+            return None
+
+        stem = module.split(".")[-1]
+        candidate = Path(__file__).parent / f"{stem}.py"
+        if not candidate.exists():
+            return None
+
+        return module
+
+    def _list_available_extensions(self) -> list[str]:
+        cogs_dir = Path(__file__).parent
+        modules: list[str] = []
+        for cog_file in cogs_dir.glob("*.py"):
+            if cog_file.name.startswith("_"):
+                continue
+            modules.append(f"src.cogs.{cog_file.stem}")
+        return sorted(modules)
+
+    async def _sync_commands(self) -> dict:
+        try:
+            await self.bot.tree.sync()
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def _run_extension_action(self, action: str, module: str) -> dict:
+        try:
+            if action == "load":
+                await self.bot.load_extension(module)
+            elif action == "unload":
+                await self.bot.unload_extension(module)
+            elif action == "reload":
+                if module in self.bot.extensions:
+                    await self.bot.reload_extension(module)
+                else:
+                    await self.bot.load_extension(module)
+            else:
+                return {"ok": False, "module": module, "error": "invalid_action"}
+            return {"ok": True, "module": module}
+        except Exception as e:
+            return {"ok": False, "module": module, "error": str(e)}
+
+    async def _handle_cogs_list(self, request: web.Request) -> web.Response:
+        if not self._is_admin(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        available = self._list_available_extensions()
+        loaded = sorted(list(self.bot.extensions.keys()))
+        return web.json_response(
+            {
+                "available_extensions": available,
+                "loaded_extensions": loaded,
+                "loaded_cogs": sorted(list(self.bot.cogs.keys())),
+                "auth": {"mode": "token" if self._cog_admin_token else "loopback"},
+            }
+        )
+
+    async def _handle_cog_action(self, request: web.Request) -> web.Response:
+        if not self._is_admin(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        cog = request.match_info["cog"]
+        action = request.match_info["action"]
+        if action not in {"load", "unload", "reload"}:
+            return web.json_response({"error": "invalid_action"}, status=400)
+
+        module = self._normalize_extension(cog)
+        if not module:
+            return web.json_response({"error": "unknown_cog"}, status=404)
+
+        payload = {}
+        try:
+            if request.can_read_body:
+                payload = await request.json()
+        except Exception:
+            payload = {}
+
+        sync = bool(payload.get("sync", True))
+
+        # Reloading/unloading the dashboard from itself can kill the request. Do it asynchronously.
+        if module == __name__ and action in {"reload", "unload"}:
+            async def do_later():
+                async with self._cog_action_lock:
+                    await self._run_extension_action(action, module)
+                    if sync:
+                        await self._sync_commands()
+
+            asyncio.create_task(do_later())
+            return web.json_response({"accepted": True, "module": module, "action": action}, status=202)
+
+        async with self._cog_action_lock:
+            result = await self._run_extension_action(action, module)
+            sync_result = {"ok": True}
+            if sync and result.get("ok"):
+                sync_result = await self._sync_commands()
+
+        return web.json_response(
+            {
+                "action": action,
+                "result": result,
+                "synced": sync_result,
+                "loaded_extensions": sorted(list(self.bot.extensions.keys())),
+                "loaded_cogs": sorted(list(self.bot.cogs.keys())),
+            }
+        )
+
+    async def _handle_cogs_bulk_action(self, request: web.Request) -> web.Response:
+        if not self._is_admin(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        action = request.match_info["action"]
+        if action not in {"load_all", "unload_all", "reload_all"}:
+            return web.json_response({"error": "invalid_action"}, status=400)
+
+        payload = {}
+        try:
+            if request.can_read_body:
+                payload = await request.json()
+        except Exception:
+            payload = {}
+
+        sync = bool(payload.get("sync", True))
+        include_dashboard = bool(payload.get("include_dashboard", False))
+
+        available = self._list_available_extensions()
+        targets = available
+        if not include_dashboard:
+            targets = [m for m in targets if m != __name__]
+
+        if action == "unload_all":
+            targets = [m for m in targets if m in self.bot.extensions]
+        elif action == "load_all":
+            targets = [m for m in targets if m not in self.bot.extensions]
+
+        op = {"load_all": "load", "unload_all": "unload", "reload_all": "reload"}[action]
+        results: list[dict] = []
+
+        async with self._cog_action_lock:
+            for module in targets:
+                results.append(await self._run_extension_action(op, module))
+
+            sync_result = {"ok": True}
+            if sync:
+                sync_result = await self._sync_commands()
+
+        ok_count = sum(1 for r in results if r.get("ok"))
+        return web.json_response(
+            {
+                "action": action,
+                "operation": op,
+                "results": results,
+                "ok": ok_count,
+                "failed": len(results) - ok_count,
+                "synced": sync_result,
+                "loaded_extensions": sorted(list(self.bot.extensions.keys())),
+                "loaded_cogs": sorted(list(self.bot.cogs.keys())),
+            }
+        )
     
     async def _handle_index(self, request: web.Request) -> web.Response:
         html_file = TEMPLATE_DIR / "index.html"

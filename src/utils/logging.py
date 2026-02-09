@@ -17,6 +17,8 @@ Usage:
     log.error("api", "Failed to fetch data", error=str(e))
 """
 import logging
+import time
+from contextlib import contextmanager
 from typing import Any
 
 
@@ -115,6 +117,40 @@ class StructuredAdapter(logging.LoggerAdapter):
         """Log exception with category."""
         msg = self._format_structured(category, None, message, **fields)
         self.exception(msg)
+
+    @staticmethod
+    def _truncate_field(value: Any, max_len: int = 240) -> str:
+        text = str(value)
+        text = " ".join(text.split())
+        if len(text) > max_len:
+            return text[: max_len - 1] + "…"
+        return text
+
+    @contextmanager
+    def span(self, category: str, name: str, **fields: Any):
+        """Log a start/end span with duration in ms.
+
+        Emits:
+          - `<name>_start` (info)
+          - `<name>_end` (info, includes `ms=`)
+          - `<name>_error` (exception, includes `ms=`) if an exception bubbles out.
+
+        Notes:
+          - Fields are stringified and truncated to keep logs readable.
+          - Use for commands, API calls, DB ops, etc.
+        """
+        safe_fields = {k: self._truncate_field(v) for k, v in fields.items() if v is not None}
+        t0 = time.perf_counter()
+        self.info_cat(category, f"{name}_start", **safe_fields)
+        try:
+            yield
+        except Exception as e:
+            ms = int((time.perf_counter() - t0) * 1000)
+            self.exception_cat(category, f"{name}_error", ms=ms, error=self._truncate_field(e), **safe_fields)
+            raise
+        else:
+            ms = int((time.perf_counter() - t0) * 1000)
+            self.info_cat(category, f"{name}_end", ms=ms, **safe_fields)
 
 
 def get_logger(name: str) -> StructuredAdapter:

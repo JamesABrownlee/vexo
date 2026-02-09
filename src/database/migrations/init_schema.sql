@@ -135,9 +135,18 @@ CREATE TABLE IF NOT EXISTS song_library_entries (
     PRIMARY KEY (user_id, song_id, source)
 );
 
+-- Tracks the last "Now Playing" message per guild so we can delete/replace it across restarts
+CREATE TABLE IF NOT EXISTS now_playing_messages (
+    guild_id INTEGER PRIMARY KEY,
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Index for library queries
 CREATE INDEX IF NOT EXISTS idx_library_song ON song_library_entries(song_id);
 CREATE INDEX IF NOT EXISTS idx_library_user ON song_library_entries(user_id);
+CREATE INDEX IF NOT EXISTS idx_now_playing_channel ON now_playing_messages(channel_id);
 
 
 -- Indexes for performance

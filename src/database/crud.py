@@ -798,3 +798,35 @@ class LibraryCRUD:
             LIMIT ?
         """
         return await self.db.fetch_all(query, (limit,))
+
+
+class NowPlayingMessageCRUD:
+    """CRUD operations for tracking the last Now Playing message per guild."""
+
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    async def get(self, guild_id: int) -> dict | None:
+        return await self.db.fetch_one(
+            "SELECT guild_id, channel_id, message_id, updated_at FROM now_playing_messages WHERE guild_id = ?",
+            (guild_id,),
+        )
+
+    async def upsert(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO now_playing_messages (guild_id, channel_id, message_id, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                channel_id = excluded.channel_id,
+                message_id = excluded.message_id,
+                updated_at = excluded.updated_at
+            """,
+            (guild_id, channel_id, message_id),
+        )
+
+    async def delete(self, guild_id: int) -> None:
+        await self.db.execute("DELETE FROM now_playing_messages WHERE guild_id = ?", (guild_id,))
+
+    async def list_all(self) -> list[dict]:
+        return await self.db.fetch_all("SELECT guild_id, channel_id, message_id, updated_at FROM now_playing_messages")

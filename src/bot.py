@@ -2,9 +2,11 @@
 Smart Discord Music Bot - Main Entry Point
 """
 import asyncio
+import json
 import logging
 import signal
 import sys
+import time
 from pathlib import Path
 
 import discord
@@ -41,6 +43,132 @@ class MusicBot(commands.Bot):
         self.db = None
         self.discovery = None
         self.preferences = None
+
+        # Interaction timing (for command start/end logs)
+        self._interaction_started: dict[int, float] = {}
+
+    @staticmethod
+    def _truncate(value, max_len: int = 240) -> str:
+        text = str(value)
+        text = " ".join(text.split())
+        if len(text) > max_len:
+            return text[: max_len - 1] + "…"
+        return text
+
+    @classmethod
+    def _summarize_options(cls, options) -> dict:
+        """Extract a small, log-friendly dict of app command options."""
+        out: dict[str, str] = {}
+        if not options:
+            return out
+
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            name = opt.get("name")
+            if not name:
+                continue
+            if "value" in opt:
+                out[str(name)] = cls._truncate(opt.get("value"))
+            elif "options" in opt:
+                # Subcommands/groups: flatten one level with dotted keys.
+                for sub in opt.get("options") or []:
+                    if isinstance(sub, dict) and "name" in sub and "value" in sub:
+                        out[f"{name}.{sub.get('name')}"] = cls._truncate(sub.get("value"))
+        return out
+
+    def _log_interaction_start(self, interaction: discord.Interaction) -> None:
+        try:
+            data = interaction.data or {}
+            itype = str(getattr(interaction.type, "name", interaction.type))
+
+            if interaction.type == discord.InteractionType.application_command:
+                name = data.get("name")
+                opts = self._summarize_options(data.get("options"))
+                log.info_cat(
+                    Category.SYSTEM,
+                    "app_command_received",
+                    module=__name__,
+                    interaction_id=interaction.id,
+                    interaction_type=itype,
+                    command=name,
+                    options=json.dumps(opts) if opts else None,
+                    guild_id=interaction.guild_id,
+                    channel_id=getattr(interaction.channel, "id", None),
+                    user_id=getattr(interaction.user, "id", None),
+                )
+            elif interaction.type == discord.InteractionType.component:
+                custom_id = data.get("custom_id")
+                log.info_cat(
+                    Category.USER,
+                    "component_interaction_received",
+                    module=__name__,
+                    interaction_id=interaction.id,
+                    interaction_type=itype,
+                    custom_id=custom_id,
+                    guild_id=interaction.guild_id,
+                    channel_id=getattr(interaction.channel, "id", None),
+                    message_id=getattr(getattr(interaction, "message", None), "id", None),
+                    user_id=getattr(interaction.user, "id", None),
+                )
+        except Exception:
+            return
+
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        # Track timing for application commands, and emit a "received" log early.
+        if interaction and interaction.id:
+            self._log_interaction_start(interaction)
+            if interaction.type == discord.InteractionType.application_command:
+                self._interaction_started[interaction.id] = time.perf_counter()
+
+        return await super().on_interaction(interaction)
+
+    async def on_app_command_completion(self, interaction: discord.Interaction, command) -> None:
+        t0 = self._interaction_started.pop(getattr(interaction, "id", 0), None)
+        ms = int((time.perf_counter() - t0) * 1000) if t0 else None
+
+        try:
+            cmd_name = getattr(command, "qualified_name", None) or getattr(command, "name", None)
+            cb = getattr(command, "callback", None)
+            module = getattr(cb, "__module__", None) if cb else None
+            binding = getattr(command, "binding", None)
+            cog = type(binding).__name__ if binding else None
+
+            log.info_cat(
+                Category.SYSTEM,
+                "app_command_completed",
+                module=module or __name__,
+                cog=cog,
+                command=cmd_name,
+                interaction_id=getattr(interaction, "id", None),
+                guild_id=getattr(interaction, "guild_id", None),
+                channel_id=getattr(interaction.channel, "id", None),
+                user_id=getattr(interaction.user, "id", None),
+                ms=ms,
+            )
+        except Exception:
+            return
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        t0 = self._interaction_started.pop(getattr(interaction, "id", 0), None)
+        ms = int((time.perf_counter() - t0) * 1000) if t0 else None
+        try:
+            data = interaction.data or {}
+            cmd_name = data.get("name")
+            log.exception_cat(
+                Category.SYSTEM,
+                "app_command_error",
+                module=__name__,
+                command=cmd_name,
+                interaction_id=getattr(interaction, "id", None),
+                guild_id=getattr(interaction, "guild_id", None),
+                channel_id=getattr(interaction.channel, "id", None),
+                user_id=getattr(interaction.user, "id", None),
+                ms=ms,
+                error=self._truncate(error),
+            )
+        except Exception:
+            return
     
     async def setup_hook(self) -> None:
         """Called when the bot is starting up."""
