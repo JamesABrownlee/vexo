@@ -12,7 +12,7 @@ interface Service {
     restartable: boolean;
 }
 
-const BOT_API_URL = process.env.NEXT_PUBLIC_BOT_API_URL || 'http://localhost:8080';
+const BOT_API_URL = '/api/bot';
 
 function ServiceCard({
     service,
@@ -94,7 +94,7 @@ export default function ServicesPage() {
 
     const fetchServices = useCallback(async () => {
         try {
-            const response = await fetch(`${BOT_API_URL}/api/services`);
+            const response = await fetch(`${BOT_API_URL}/services`);
             if (!response.ok) {
                 throw new Error(`Failed to fetch services: ${response.status}`);
             }
@@ -126,7 +126,7 @@ export default function ServicesPage() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [setServices, setError, setLoading]);
 
     useEffect(() => {
         fetchServices();
@@ -139,7 +139,7 @@ export default function ServicesPage() {
         setRestartingServices(prev => new Set(prev).add(serviceId));
 
         try {
-            const response = await fetch(`${BOT_API_URL}/api/services/${serviceId}/restart`, {
+            const response = await fetch(`${BOT_API_URL}/services/${serviceId}/restart`, {
                 method: 'POST',
             });
 
