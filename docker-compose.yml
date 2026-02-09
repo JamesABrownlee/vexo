@@ -24,7 +24,7 @@ services:
       - vexo-network
 
   dashboard:
-    build: ./dashboard
+    image: ghcr.io/jamesabrownlee/vexo-dashboard:latest
     container_name: vexo-dashboard
     restart: unless-stopped
     environment:
