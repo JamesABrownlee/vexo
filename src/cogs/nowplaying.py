@@ -481,6 +481,7 @@ class NowPlayingCog(commands.Cog):
             loading_embed.add_field(name="Discovery", value=item.discovery_reason, inline=False)
 
         msg = None
+        existing_art: tuple[bytes, str] | None = None
 
         try:
             async with player._np_lock:
@@ -515,6 +516,17 @@ class NowPlayingCog(commands.Cog):
 
                 # If we want to bump the message to the bottom, delete it and re-send.
                 if repost and msg is not None:
+                    # Best effort: reuse existing artwork from the current message so we don't show "loading" again.
+                    try:
+                        if getattr(msg, "attachments", None):
+                            att = msg.attachments[0]
+                            filename = getattr(att, "filename", None) or "nowplaying.png"
+                            data = await att.read()
+                            if data:
+                                existing_art = (data, filename)
+                    except Exception:
+                        existing_art = None
+
                     try:
                         await msg.delete()
                     except discord.Forbidden:
@@ -537,7 +549,12 @@ class NowPlayingCog(commands.Cog):
                         msg = None
 
                 if msg is None:
-                    msg = await channel.send(embed=loading_embed, view=view)
+                    if existing_art is not None:
+                        data, filename = existing_art
+                        file = discord.File(io.BytesIO(data), filename=filename)
+                        msg = await channel.send(file=file, view=view)
+                    else:
+                        msg = await channel.send(embed=loading_embed, view=view)
 
                 player.last_np_msg = msg
 
@@ -549,14 +566,15 @@ class NowPlayingCog(commands.Cog):
                         log.debug_cat(Category.SYSTEM, "Failed to persist Now Playing message", error=str(e), guild_id=player.guild_id)
 
             # Fetch image and swap the message after releasing the lock.
-            asyncio.create_task(
-                self._swap_loading_to_image(
-                    guild_id=player.guild_id,
-                    channel_id=player.text_channel_id,
-                    message_id=msg.id,
-                    video_id=video_id,
+            if existing_art is None:
+                asyncio.create_task(
+                    self._swap_loading_to_image(
+                        guild_id=player.guild_id,
+                        channel_id=player.text_channel_id,
+                        message_id=msg.id,
+                        video_id=video_id,
+                    )
                 )
-            )
         except Exception as e:
             log.exception_cat(
                 Category.SYSTEM,
