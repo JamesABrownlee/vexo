@@ -10,6 +10,7 @@ Owns:
 import aiohttp
 import asyncio
 import io
+import time
 from datetime import datetime, UTC
 from urllib.parse import quote_plus
 
@@ -90,12 +91,51 @@ class NowPlayingView(discord.ui.View):
 
     async def _safe_defer(self, interaction: discord.Interaction, *, ephemeral: bool = True) -> bool:
         try:
-            if not interaction.response.is_done():
+            t0 = time.perf_counter()
+            try:
                 await interaction.response.defer(ephemeral=ephemeral)
-            return True
-        except discord.InteractionResponded:
+            except discord.InteractionResponded:
+                log.debug_cat(
+                    Category.USER,
+                    "interaction_defer_already_responded",
+                    module=__name__,
+                    interaction_id=getattr(interaction, "id", None),
+                    custom_id=(interaction.data or {}).get("custom_id") if isinstance(interaction.data, dict) else None,
+                    guild_id=getattr(interaction, "guild_id", None),
+                    channel_id=getattr(getattr(interaction, "channel", None), "id", None),
+                    message_id=getattr(getattr(interaction, "message", None), "id", None),
+                    user_id=getattr(getattr(interaction, "user", None), "id", None),
+                )
+                return True
+            ms = int((time.perf_counter() - t0) * 1000)
+            # If defer itself took a long time, it's a strong signal of event-loop lag / network delay.
+            log_fn = log.warning_cat if ms >= 2500 else log.info_cat
+            log_fn(
+                Category.USER,
+                "interaction_defer_ok",
+                module=__name__,
+                interaction_id=getattr(interaction, "id", None),
+                interaction_type=str(getattr(getattr(interaction, "type", None), "name", getattr(interaction, "type", None))),
+                custom_id=(interaction.data or {}).get("custom_id") if isinstance(interaction.data, dict) else None,
+                guild_id=getattr(interaction, "guild_id", None),
+                channel_id=getattr(getattr(interaction, "channel", None), "id", None),
+                message_id=getattr(getattr(interaction, "message", None), "id", None),
+                user_id=getattr(getattr(interaction, "user", None), "id", None),
+                ms=ms,
+            )
             return True
         except discord.NotFound:
+            log.warning_cat(
+                Category.USER,
+                "interaction_defer_not_found",
+                module=__name__,
+                interaction_id=getattr(interaction, "id", None),
+                custom_id=(interaction.data or {}).get("custom_id") if isinstance(interaction.data, dict) else None,
+                guild_id=getattr(interaction, "guild_id", None),
+                channel_id=getattr(getattr(interaction, "channel", None), "id", None),
+                message_id=getattr(getattr(interaction, "message", None), "id", None),
+                user_id=getattr(getattr(interaction, "user", None), "id", None),
+            )
             return False
         except Exception as e:
             log.exception_cat(Category.SYSTEM, "Failed to defer NowPlayingView interaction", error=str(e))
@@ -138,6 +178,7 @@ class NowPlayingView(discord.ui.View):
             module=__name__,
             view="NowPlayingView",
             custom_id=getattr(button, "custom_id", None),
+            interaction_id=getattr(interaction, "id", None),
             guild_id=interaction.guild_id,
             channel_id=getattr(interaction.channel, "id", None),
             message_id=getattr(getattr(interaction, "message", None), "id", None),
@@ -184,6 +225,7 @@ class NowPlayingView(discord.ui.View):
             module=__name__,
             view="NowPlayingView",
             custom_id=getattr(button, "custom_id", None),
+            interaction_id=getattr(interaction, "id", None),
             guild_id=interaction.guild_id,
             channel_id=getattr(interaction.channel, "id", None),
             message_id=getattr(getattr(interaction, "message", None), "id", None),
@@ -239,6 +281,7 @@ class NowPlayingView(discord.ui.View):
             module=__name__,
             view="NowPlayingView",
             custom_id=getattr(button, "custom_id", None),
+            interaction_id=getattr(interaction, "id", None),
             guild_id=interaction.guild_id,
             channel_id=getattr(interaction.channel, "id", None),
             message_id=getattr(getattr(interaction, "message", None), "id", None),
@@ -281,6 +324,7 @@ class NowPlayingView(discord.ui.View):
             module=__name__,
             view="NowPlayingView",
             custom_id=getattr(button, "custom_id", None),
+            interaction_id=getattr(interaction, "id", None),
             guild_id=interaction.guild_id,
             channel_id=getattr(interaction.channel, "id", None),
             message_id=getattr(getattr(interaction, "message", None), "id", None),
@@ -342,6 +386,7 @@ class NowPlayingView(discord.ui.View):
             module=__name__,
             view="NowPlayingView",
             custom_id=getattr(button, "custom_id", None),
+            interaction_id=getattr(interaction, "id", None),
             guild_id=interaction.guild_id,
             channel_id=getattr(interaction.channel, "id", None),
             message_id=getattr(getattr(interaction, "message", None), "id", None),
@@ -400,6 +445,7 @@ class NowPlayingView(discord.ui.View):
             module=__name__,
             view="NowPlayingView",
             custom_id="np:skip_to",
+            interaction_id=getattr(interaction, "id", None),
             guild_id=interaction.guild_id,
             user_id=getattr(interaction.user, "id", None),
         ):

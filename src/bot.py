@@ -45,7 +45,7 @@ class MusicBot(commands.Bot):
         self.preferences = None
 
         # Interaction timing (for command start/end logs)
-        self._interaction_started: dict[int, float] = {}
+        self._interaction_started: dict[int, dict] = {}
         self._loop_lag_task: asyncio.Task | None = None
 
     @staticmethod
@@ -122,7 +122,12 @@ class MusicBot(commands.Bot):
             if interaction and interaction.id:
                 self._log_interaction_start(interaction)
                 if interaction.type == discord.InteractionType.application_command:
-                    self._interaction_started[interaction.id] = time.perf_counter()
+                    data = interaction.data or {}
+                    opts = self._summarize_options(data.get("options"))
+                    self._interaction_started[interaction.id] = {
+                        "t0": time.perf_counter(),
+                        "options": opts,
+                    }
         except Exception as e:
             try:
                 log.exception_cat(
@@ -142,8 +147,10 @@ class MusicBot(commands.Bot):
         return None
 
     async def on_app_command_completion(self, interaction: discord.Interaction, command) -> None:
-        t0 = self._interaction_started.pop(getattr(interaction, "id", 0), None)
-        ms = int((time.perf_counter() - t0) * 1000) if t0 else None
+        info = self._interaction_started.pop(getattr(interaction, "id", 0), None) or {}
+        t0 = info.get("t0") if isinstance(info, dict) else None
+        ms = int((time.perf_counter() - t0) * 1000) if isinstance(t0, (int, float)) else None
+        options = info.get("options") if isinstance(info, dict) else None
 
         try:
             cmd_name = getattr(command, "qualified_name", None) or getattr(command, "name", None)
@@ -163,13 +170,16 @@ class MusicBot(commands.Bot):
                 channel_id=getattr(interaction.channel, "id", None),
                 user_id=getattr(interaction.user, "id", None),
                 ms=ms,
+                options=json.dumps(options) if isinstance(options, dict) and options else None,
             )
         except Exception:
             return
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: Exception) -> None:
-        t0 = self._interaction_started.pop(getattr(interaction, "id", 0), None)
-        ms = int((time.perf_counter() - t0) * 1000) if t0 else None
+        info = self._interaction_started.pop(getattr(interaction, "id", 0), None) or {}
+        t0 = info.get("t0") if isinstance(info, dict) else None
+        ms = int((time.perf_counter() - t0) * 1000) if isinstance(t0, (int, float)) else None
+        options = info.get("options") if isinstance(info, dict) else None
         try:
             data = interaction.data or {}
             cmd_name = data.get("name")
@@ -184,6 +194,7 @@ class MusicBot(commands.Bot):
                 user_id=getattr(interaction.user, "id", None),
                 ms=ms,
                 error=self._truncate(error),
+                options=json.dumps(options) if isinstance(options, dict) and options else None,
             )
         except Exception:
             return
