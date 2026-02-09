@@ -30,27 +30,37 @@ class NowPlayingView(discord.ui.View):
     def __init__(self, bot: commands.Bot, queue_items: list = None):
         super().__init__(timeout=None)
         self.bot = bot
-        
-        # Add select menu with queue items if provided
+
+        # Add select menu with queue items if provided.
+        # Note: discord.py adds decorator-defined children during View.__init__.
+        # If we add the select after that, it appears at the end; we want it first.
         if queue_items:
+            existing_items = list(self.children)
+
             select_options = [
                 discord.SelectOption(
                     label=f"{i+1}. {qi.title[:50]}",
                     description=qi.artist[:100],
-                    value=str(i)
+                    value=str(i),
                 )
                 for i, qi in enumerate(queue_items[:10])  # Limit to 10 items
             ]
+
             if select_options:
                 select = discord.ui.Select(
-                    placeholder="⏭️ Skip to a song...",
+                    placeholder="⏭️ Choose next song...",
                     custom_id="np:skip_to",
                     options=select_options,
                     min_values=1,
                     max_values=1,
+                    row=0,
                 )
                 select.callback = self.skip_to_callback
+
+                self.clear_items()
                 self.add_item(select)
+                for item in existing_items:
+                    self.add_item(item)
 
     @property
     def music(self):
@@ -442,39 +452,34 @@ class NowPlayingCog(commands.Cog):
                     pass
 
     async def send_now_playing_for_player(self, player) -> None:
-        """Send/replace the Now Playing message for the given guild player."""
-        log.info_cat(
-            Category.SYSTEM,
-            "send_now_playing_for_player called",
-            guild_id=player.guild_id,
-            has_current=bool(player.current),
-            has_text_channel_id=bool(player.text_channel_id),
-            title=getattr(player.current, "title", None) if player.current else None,
-            text_channel_id=player.text_channel_id,
-        )
+        """Post a Now Playing view immediately with a loading embed, then swap to the image when ready."""
         if not player.current or not player.text_channel_id:
-            log.debug_cat(
-                Category.SYSTEM,
-                "send_now_playing_for_player early return",
-                guild_id=player.guild_id,
-                has_current=bool(player.current),
-                has_text_channel_id=bool(player.text_channel_id),
-            )
             return
 
         channel = self.bot.get_channel(player.text_channel_id)
         if not channel:
-            log.debug_cat(
-                Category.SYSTEM,
-                "send_now_playing_for_player channel not found",
-                guild_id=player.guild_id,
-                text_channel_id=player.text_channel_id,
-            )
             return
+
+        item = player.current
+        video_id = item.video_id
+
+        # Create view with dynamic queue select options (top 10)
+        queue_items = list(player.queue._queue)[:10]
+        view = NowPlayingView(self.bot, queue_items=queue_items)
+
+        loading_embed = discord.Embed(
+            title="🎵 Now Playing",
+            description=f"**{item.title}**\n{item.artist}\n\n⏳ Loading artwork…",
+            color=0x7c3aed,
+        )
+        if item.discovery_reason:
+            loading_embed.add_field(name="Discovery", value=item.discovery_reason, inline=False)
+
+        msg = None
 
         try:
             async with player._np_lock:
-                # Delete old persisted message first
+                # Try reuse the persisted message (edit instead of delete/send).
                 if hasattr(self.bot, "db") and self.bot.db:
                     try:
                         np_crud = NowPlayingMessageCRUD(self.bot.db)
@@ -482,138 +487,42 @@ class NowPlayingCog(commands.Cog):
                         if old:
                             old_channel_id = old.get("channel_id")
                             old_message_id = old.get("message_id")
-                            try:
-                                old_channel = self.bot.get_channel(old_channel_id) or await self.bot.fetch_channel(old_channel_id)
-                                if hasattr(old_channel, "fetch_message"):
-                                    try:
-                                        old_msg = await old_channel.fetch_message(old_message_id)
-                                        await old_msg.delete()
-                                    except discord.NotFound:
-                                        pass
-                            finally:
-                                await np_crud.delete(player.guild_id)
+
+                            # If channel changed, do not reuse old message.
+                            if int(old_channel_id) == int(player.text_channel_id):
+                                try:
+                                    old_channel = self.bot.get_channel(old_channel_id) or await self.bot.fetch_channel(old_channel_id)
+                                    if hasattr(old_channel, "fetch_message"):
+                                        msg = await old_channel.fetch_message(old_message_id)
+                                except Exception:
+                                    msg = None
+                            else:
+                                try:
+                                    await np_crud.delete(player.guild_id)
+                                except Exception:
+                                    pass
                     except Exception as e:
                         log.debug_cat(Category.SYSTEM, "Now Playing persistence lookup failed", error=str(e), guild_id=player.guild_id)
 
-                # Also try in-memory message (best effort)
-                if player.last_np_msg:
+                # Fallback: if we still have the in-memory reference, try reuse it.
+                if msg is None and player.last_np_msg is not None:
+                    msg = player.last_np_msg
+
+                # Show loading state immediately.
+                if msg is not None:
                     try:
-                        await player.last_np_msg.delete()
+                        try:
+                            await msg.edit(embed=loading_embed, view=view, attachments=[])
+                        except TypeError:
+                            # Older libs may not support attachments= in edit.
+                            await msg.edit(embed=loading_embed, view=view)
                     except Exception:
-                        pass
-                    player.last_np_msg = None
+                        msg = None
 
-                item = player.current
-
-                requested_by_str = ""
-                liked_by_str = ""
-                disliked_by_str = ""
-
-                if hasattr(self.bot, "db") and item.song_db_id:
-                    try:
-                        stats = await self.bot.db.fetch_one("""
-                            SELECT 
-                                (SELECT GROUP_CONCAT(DISTINCT u.username) FROM playback_history ph JOIN users u ON ph.for_user_id = u.id WHERE ph.song_id = ? AND ph.discovery_source = "user_request") as requested_by,
-                                (SELECT GROUP_CONCAT(DISTINCT u.username) FROM song_reactions sr JOIN users u ON sr.song_id = ? AND sr.user_id = u.id AND sr.reaction = 'like') as liked_by,
-                                (SELECT GROUP_CONCAT(DISTINCT u.username) FROM song_reactions sr JOIN users u ON sr.song_id = ? AND sr.user_id = u.id AND sr.reaction = 'dislike') as disliked_by
-                        """, (item.song_db_id, item.song_db_id, item.song_db_id))
-
-                        if stats:
-                            requested_by_str = stats.get("requested_by") or ""
-                            liked_by_str = stats.get("liked_by") or ""
-                            disliked_by_str = stats.get("disliked_by") or ""
-                    except Exception as e:
-                        log.debug_cat(Category.DATABASE, "Failed to fetch Now Playing stats", error=str(e), guild_id=player.guild_id)
-
-                current_time_str = "0:00"
-                progress_percent = 0
-                if player.start_time:
-                    elapsed = (datetime.now(UTC) - player.start_time).total_seconds()
-                    minutes, seconds = divmod(int(elapsed), 60)
-                    current_time_str = f"{minutes}:{seconds:02d}"
-                    if item.duration_seconds:
-                        progress_percent = min(100, int((elapsed / item.duration_seconds) * 100))
-
-                total_time_str = "0:00"
-                if item.duration_seconds:
-                    minutes, seconds = divmod(item.duration_seconds, 60)
-                    total_time_str = f"{minutes}:{seconds:02d}"
-
-                for_user_str = ""
-                target_user_id = item.for_user_id or item.requester_id
-                if target_user_id and player.voice_client and player.voice_client.guild:
-                    member = player.voice_client.guild.get_member(target_user_id)
-                    if member:
-                        for_user_str = member.display_name
-                    else:
-                        user = self.bot.get_user(target_user_id)
-                        if user:
-                            for_user_str = user.display_name
-
-                params = {
-                    "title": item.title,
-                    "artist": item.artist,
-                    "thumbnail": f"https://img.youtube.com/vi/{item.video_id}/hqdefault.jpg",
-                    "genre": item.genre or "",
-                    "year": str(item.year) if item.year else "",
-                    "progress": str(progress_percent),
-                    "duration": total_time_str,
-                    "current": current_time_str,
-                    "requestedBy": requested_by_str,
-                    "likedBy": liked_by_str,
-                    "dislikedBy": disliked_by_str,
-                    "queueSize": str(player.queue.qsize()),
-                    "discoveryReason": item.discovery_reason or "",
-                    "forUser": for_user_str,
-                    "videoUrl": f"https://youtube.com/watch?v={item.video_id}"
-                }
-
-                query_str = "&".join([f"{k}={quote_plus(str(v))}" for k, v in params.items()])
-                image_url = f"http://dashboard:3000/api/now-playing/image?{query_str}"
-
-                # Create view with dynamic queue select options (top 10)
-                queue_items = list(player.queue._queue)[:10]
-                view = NowPlayingView(self.bot, queue_items=queue_items)
-                
-                log.debug_cat(
-                    Category.SYSTEM,
-                    "About to send now playing message",
-                    guild_id=player.guild_id,
-                    channel_id=player.text_channel_id,
-                    title=item.title,
-                    image_url=image_url,
-                )
-                
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(image_url, timeout=5) as resp:
-                            if resp.status == 200:
-                                image_data = await resp.read()
-                                file = discord.File(io.BytesIO(image_data), filename="nowplaying.png")
-                                msg = await channel.send(file=file, view=view)
-                            else:
-                                raise RuntimeError(f"dashboard image http {resp.status}")
-                except Exception as e:
-                    log.debug_cat(
-                        Category.SYSTEM,
-                        "Now Playing dashboard image failed, using embed fallback",
-                        error=str(e),
-                        guild_id=player.guild_id,
-                        image_url=image_url,
-                    )
-                    embed = discord.Embed(title="🎵 Now Playing", description=f"**{item.title}**\n{item.artist}", color=0x7c3aed)
-                    msg = await channel.send(embed=embed, view=view)
+                if msg is None:
+                    msg = await channel.send(embed=loading_embed, view=view)
 
                 player.last_np_msg = msg
-                
-                log.info_cat(
-                    Category.SYSTEM,
-                    "Now playing message sent",
-                    guild_id=player.guild_id,
-                    channel_id=player.text_channel_id,
-                    message_id=msg.id,
-                    title=item.title,
-                )
 
                 if hasattr(self.bot, "db") and self.bot.db:
                     try:
@@ -621,6 +530,16 @@ class NowPlayingCog(commands.Cog):
                         await np_crud.upsert(player.guild_id, player.text_channel_id, msg.id)
                     except Exception as e:
                         log.debug_cat(Category.SYSTEM, "Failed to persist Now Playing message", error=str(e), guild_id=player.guild_id)
+
+            # Fetch image and swap the message after releasing the lock.
+            asyncio.create_task(
+                self._swap_loading_to_image(
+                    guild_id=player.guild_id,
+                    channel_id=player.text_channel_id,
+                    message_id=msg.id,
+                    video_id=video_id,
+                )
+            )
         except Exception as e:
             log.exception_cat(
                 Category.SYSTEM,
@@ -628,6 +547,141 @@ class NowPlayingCog(commands.Cog):
                 error=str(e),
                 guild_id=player.guild_id,
             )
+
+    async def _swap_loading_to_image(self, *, guild_id: int, channel_id: int, message_id: int, video_id: str) -> None:
+        """Fetch the dashboard-rendered image and edit the message to show it."""
+        music = self.music
+        if not music:
+            return
+
+        player = music.get_player(guild_id)
+        if not player.current or player.current.video_id != video_id:
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+
+        try:
+            msg = await channel.fetch_message(message_id)
+        except Exception:
+            return
+
+        item = player.current
+
+        # Fetch additional stats for rendering, if available.
+        requested_by_str = ""
+        liked_by_str = ""
+        disliked_by_str = ""
+
+        if hasattr(self.bot, "db") and self.bot.db and item.song_db_id:
+            try:
+                stats = await self.bot.db.fetch_one(
+                    """
+                    SELECT 
+                        (SELECT GROUP_CONCAT(DISTINCT u.username) FROM playback_history ph JOIN users u ON ph.for_user_id = u.id WHERE ph.song_id = ? AND ph.discovery_source = "user_request") as requested_by,
+                        (SELECT GROUP_CONCAT(DISTINCT u.username) FROM song_reactions sr JOIN users u ON sr.song_id = ? AND sr.user_id = u.id AND sr.reaction = 'like') as liked_by,
+                        (SELECT GROUP_CONCAT(DISTINCT u.username) FROM song_reactions sr JOIN users u ON sr.song_id = ? AND sr.user_id = u.id AND sr.reaction = 'dislike') as disliked_by
+                    """,
+                    (item.song_db_id, item.song_db_id, item.song_db_id),
+                )
+                if stats:
+                    requested_by_str = stats.get("requested_by") or ""
+                    liked_by_str = stats.get("liked_by") or ""
+                    disliked_by_str = stats.get("disliked_by") or ""
+            except Exception:
+                pass
+
+        current_time_str = "0:00"
+        progress_percent = 0
+        if player.start_time:
+            elapsed = (datetime.now(UTC) - player.start_time).total_seconds()
+            minutes, seconds = divmod(int(elapsed), 60)
+            current_time_str = f"{minutes}:{seconds:02d}"
+            if item.duration_seconds:
+                progress_percent = min(100, int((elapsed / item.duration_seconds) * 100))
+
+        total_time_str = "0:00"
+        if item.duration_seconds:
+            minutes, seconds = divmod(item.duration_seconds, 60)
+            total_time_str = f"{minutes}:{seconds:02d}"
+
+        for_user_str = ""
+        target_user_id = item.for_user_id or item.requester_id
+        if target_user_id and player.voice_client and player.voice_client.guild:
+            member = player.voice_client.guild.get_member(target_user_id)
+            if member:
+                for_user_str = member.display_name
+            else:
+                user = self.bot.get_user(target_user_id)
+                if user:
+                    for_user_str = user.display_name
+
+        params = {
+            "title": item.title,
+            "artist": item.artist,
+            "thumbnail": f"https://img.youtube.com/vi/{item.video_id}/hqdefault.jpg",
+            "genre": item.genre or "",
+            "year": str(item.year) if item.year else "",
+            "progress": str(progress_percent),
+            "duration": total_time_str,
+            "current": current_time_str,
+            "requestedBy": requested_by_str,
+            "likedBy": liked_by_str,
+            "dislikedBy": disliked_by_str,
+            "queueSize": str(player.queue.qsize()),
+            "discoveryReason": item.discovery_reason or "",
+            "forUser": for_user_str,
+            "videoUrl": f"https://youtube.com/watch?v={item.video_id}",
+        }
+
+        query_str = "&".join([f"{k}={quote_plus(str(v))}" for k, v in params.items()])
+        image_url = f"http://dashboard:3000/api/now-playing/image?{query_str}"
+
+        # Updated view (queue may have changed)
+        queue_items = list(player.queue._queue)[:10]
+        view = NowPlayingView(self.bot, queue_items=queue_items)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, timeout=5) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"dashboard image http {resp.status}")
+                    image_data = await resp.read()
+
+            file = discord.File(io.BytesIO(image_data), filename="nowplaying.png")
+
+            # Replace the loading embed with the image.
+            try:
+                await msg.edit(embed=None, view=view, attachments=[file])
+            except TypeError:
+                # Some libs require deleting and re-sending to attach a file.
+                try:
+                    await msg.delete()
+                except Exception:
+                    return
+                new_msg = await channel.send(file=file, view=view)
+                player.last_np_msg = new_msg
+                if hasattr(self.bot, "db") and self.bot.db:
+                    try:
+                        np_crud = NowPlayingMessageCRUD(self.bot.db)
+                        await np_crud.upsert(guild_id, channel_id, new_msg.id)
+                    except Exception:
+                        pass
+        except Exception as e:
+            # Keep the loading embed; optionally update it to show the failure.
+            try:
+                err_embed = discord.Embed(
+                    title="🎵 Now Playing",
+                    description=f"**{item.title}**\n{item.artist}\n\n⚠️ Artwork unavailable.",
+                    color=0x7c3aed,
+                )
+                await msg.edit(embed=err_embed, view=view)
+            except Exception:
+                pass
 
     @app_commands.command(name="nowplaying", description="Show the current song")
     async def nowplaying(self, interaction: discord.Interaction):
