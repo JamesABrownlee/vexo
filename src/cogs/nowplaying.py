@@ -83,7 +83,7 @@ class NowPlayingView(discord.ui.View):
         except Exception:
             return
 
-    @discord.ui.button(emoji="⏸️", style=discord.ButtonStyle.secondary, custom_id="np:pause_resume")
+    @discord.ui.button(emoji="⏸", style=discord.ButtonStyle.secondary, custom_id="np:pause_resume")
     async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
         with log.span(
             Category.USER,
@@ -113,10 +113,10 @@ class NowPlayingView(discord.ui.View):
             if player.voice_client:
                 if player.voice_client.is_playing():
                     player.voice_client.pause()
-                    await self._safe_send(interaction, "⏸️ Paused", ephemeral=True)
+                    await self._safe_send(interaction, "⏸ Paused", ephemeral=True)
                 elif player.voice_client.is_paused():
                     player.voice_client.resume()
-                    await self._safe_send(interaction, "▶️ Resumed", ephemeral=True)
+                    await self._safe_send(interaction, "▶ Resumed", ephemeral=True)
         except Exception as e:
             log.exception_cat(Category.SYSTEM, "NowPlayingView pause/resume failed", error=str(e))
             return
@@ -163,13 +163,13 @@ class NowPlayingView(discord.ui.View):
             await player.voice_client.disconnect()
             player.voice_client = None
 
-            await self._safe_send(interaction, "⏹️ Stopped and cleared queue!", ephemeral=True)
+            await self._safe_send(interaction, "⏹ Stopped and cleared queue!", ephemeral=True)
             discord.ui.View.stop(self)
         except Exception as e:
             log.exception_cat(Category.SYSTEM, "NowPlayingView stop failed", error=str(e))
             return
 
-    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, custom_id="np:skip")
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary, custom_id="np:skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         with log.span(
             Category.USER,
