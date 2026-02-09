@@ -1,20 +1,35 @@
 'use client';
 
-import { Library as LibraryIcon, Search, Music2, User, Calendar, X, Heart, TrendingUp } from 'lucide-react';
+import { Library as LibraryIcon, Search, Music2, User, Calendar, X, Heart, Play, Clock, ExternalLink } from 'lucide-react';
 import { useState, useMemo } from 'react';
 
 interface LibraryItem {
     id: number;
     title: string;
     artist_name: string;
+    album: string | null;
+    release_year: number | null;
+    duration_seconds: number | null;
+    yt_id: string | null;
+    spotify_id: string | null;
     genre: string | null;
     contributors: string | null;
     sources: string | null;
     last_added: string;
+    play_count: number;
+    like_count: number;
+    dislike_count: number;
 }
 
 interface LibraryPageClientProps {
     initialLibrary: LibraryItem[];
+}
+
+function formatDuration(seconds: number | null): string {
+    if (!seconds) return '--:--';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 function LibraryCard({ item }: { item: LibraryItem }) {
@@ -29,7 +44,10 @@ function LibraryCard({ item }: { item: LibraryItem }) {
             'spotify_import': { color: 'bg-green-500/20 text-green-400', label: 'Spotify' },
             'youtube_import': { color: 'bg-red-500/20 text-red-400', label: 'YouTube' },
             'user_request': { color: 'bg-blue-500/20 text-blue-400', label: 'Request' },
+            'request': { color: 'bg-blue-500/20 text-blue-400', label: 'Request' },
             'reaction': { color: 'bg-pink-500/20 text-pink-400', label: 'Liked' },
+            'like': { color: 'bg-pink-500/20 text-pink-400', label: 'Liked' },
+            'import': { color: 'bg-green-500/20 text-green-400', label: 'Import' },
         };
         return badges[source] || { color: 'bg-zinc-500/20 text-zinc-400', label: source };
     };
@@ -40,30 +58,61 @@ function LibraryCard({ item }: { item: LibraryItem }) {
 
     return (
         <div className="bento-card flex items-center gap-4 group hover:border-violet-500/30 transition-all">
-            {/* Song Icon */}
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center shrink-0 group-hover:from-violet-500/30 group-hover:to-pink-500/30 transition-colors">
-                <Music2 className="w-6 h-6 text-violet-400" />
+            {/* Thumbnail */}
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center shrink-0 group-hover:from-violet-500/30 group-hover:to-pink-500/30 transition-colors overflow-hidden">
+                {item.yt_id ? (
+                    <img
+                        src={`https://i.ytimg.com/vi/${item.yt_id}/default.jpg`}
+                        alt=""
+                        className="w-full h-full object-cover"
+                    />
+                ) : (
+                    <Music2 className="w-6 h-6 text-violet-400" />
+                )}
             </div>
 
             {/* Song Info */}
             <div className="flex-1 min-w-0">
-                <p className="text-base font-medium text-white truncate group-hover:text-violet-400 transition-colors">
-                    {item.title}
+                <div className="flex items-center gap-2">
+                    <p className="text-base font-medium text-white truncate group-hover:text-violet-400 transition-colors">
+                        {item.title}
+                    </p>
+                    {item.yt_id && (
+                        <a
+                            href={`https://youtube.com/watch?v=${item.yt_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                            <ExternalLink className="w-3 h-3 text-zinc-500 hover:text-white" />
+                        </a>
+                    )}
+                </div>
+                <p className="text-sm text-zinc-500 truncate">
+                    {item.artist_name}
+                    {item.album && <span className="text-zinc-600"> · {item.album}</span>}
+                    {item.release_year && <span className="text-zinc-600"> ({item.release_year})</span>}
                 </p>
-                <p className="text-sm text-zinc-500 truncate">{item.artist_name}</p>
+            </div>
+
+            {/* Duration */}
+            <div className="w-14 text-center shrink-0">
+                <span className="text-sm text-zinc-400 font-mono">{formatDuration(item.duration_seconds)}</span>
             </div>
 
             {/* Genre */}
-            <div className="w-40 shrink-0 flex gap-1 flex-wrap">
+            <div className="w-36 shrink-0 flex gap-1 flex-wrap">
                 {genres.map((genre, i) => (
-                    <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-400">
+                    <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-400 truncate max-w-[70px]">
                         {genre.trim()}
                     </span>
                 ))}
+                {genres.length === 0 && <span className="text-xs text-zinc-600">—</span>}
             </div>
 
             {/* Sources */}
-            <div className="w-32 shrink-0 flex gap-1 flex-wrap">
+            <div className="w-28 shrink-0 flex gap-1 flex-wrap">
                 {sources.slice(0, 2).map((source, i) => {
                     const badge = getSourceBadge(source.trim());
                     return (
@@ -74,14 +123,26 @@ function LibraryCard({ item }: { item: LibraryItem }) {
                 })}
             </div>
 
+            {/* Stats */}
+            <div className="w-24 shrink-0 flex items-center justify-center gap-3">
+                <span className="text-xs text-zinc-400 flex items-center gap-1">
+                    <Play className="w-3 h-3" />
+                    {item.play_count || 0}
+                </span>
+                <span className="text-xs text-pink-400 flex items-center gap-1">
+                    <Heart className="w-3 h-3" />
+                    {item.like_count || 0}
+                </span>
+            </div>
+
             {/* Contributors */}
-            <div className="w-24 shrink-0 flex items-center gap-2 justify-center">
+            <div className="w-16 shrink-0 flex items-center gap-1 justify-center">
                 <User className="w-4 h-4 text-zinc-600" />
                 <span className="text-sm text-zinc-400">{contributorCount}</span>
             </div>
 
             {/* Date Added */}
-            <div className="w-24 text-right shrink-0 flex items-center gap-2 justify-end">
+            <div className="w-20 text-right shrink-0 flex items-center gap-1 justify-end">
                 <Calendar className="w-4 h-4 text-zinc-600" />
                 <span className="text-sm text-zinc-400">{formatDate(item.last_added)}</span>
             </div>
@@ -93,7 +154,7 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
     const [searchQuery, setSearchQuery] = useState('');
     const [genreFilter, setGenreFilter] = useState<string>('all');
     const [sourceFilter, setSourceFilter] = useState<string>('all');
-    const [sortBy, setSortBy] = useState<'recent' | 'title' | 'artist'>('recent');
+    const [sortBy, setSortBy] = useState<'recent' | 'title' | 'artist' | 'plays' | 'likes'>('recent');
 
     // Get unique genres and sources
     const { allGenres, allSources } = useMemo(() => {
@@ -120,7 +181,8 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
             const query = searchQuery.toLowerCase();
             result = result.filter(item =>
                 item.title?.toLowerCase().includes(query) ||
-                item.artist_name?.toLowerCase().includes(query)
+                item.artist_name?.toLowerCase().includes(query) ||
+                item.album?.toLowerCase().includes(query)
             );
         }
 
@@ -145,6 +207,10 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
                     return (a.title || '').localeCompare(b.title || '');
                 case 'artist':
                     return (a.artist_name || '').localeCompare(b.artist_name || '');
+                case 'plays':
+                    return (b.play_count || 0) - (a.play_count || 0);
+                case 'likes':
+                    return (b.like_count || 0) - (a.like_count || 0);
                 case 'recent':
                 default:
                     return new Date(b.last_added).getTime() - new Date(a.last_added).getTime();
@@ -157,6 +223,11 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
     // Stats
     const uniqueArtists = new Set(initialLibrary.map(i => i.artist_name)).size;
     const uniqueGenres = allGenres.length;
+    const totalPlays = initialLibrary.reduce((sum, i) => sum + (i.play_count || 0), 0);
+    const totalLikes = initialLibrary.reduce((sum, i) => sum + (i.like_count || 0), 0);
+    const totalDuration = initialLibrary.reduce((sum, i) => sum + (i.duration_seconds || 0), 0);
+    const totalHours = Math.floor(totalDuration / 3600);
+    const totalMins = Math.floor((totalDuration % 3600) / 60);
 
     const hasActiveFilters = searchQuery || genreFilter !== 'all' || sourceFilter !== 'all';
 
@@ -176,13 +247,13 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
                         Song Library
                     </h1>
                     <p className="text-sm text-zinc-500 mt-1">
-                        {initialLibrary.length} songs from {uniqueArtists} artists
+                        {initialLibrary.length} songs from {uniqueArtists} artists · {totalHours}h {totalMins}m total
                     </p>
                 </div>
             </div>
 
             {/* Quick Stats */}
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-5 gap-4">
                 <div className="bento-card text-center">
                     <p className="text-3xl font-bold text-white">{initialLibrary.length}</p>
                     <p className="text-sm text-zinc-500">Songs</p>
@@ -196,10 +267,18 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
                     <p className="text-sm text-zinc-500">Genres</p>
                 </div>
                 <div className="bento-card text-center">
-                    <p className="text-3xl font-bold text-green-400">
-                        {initialLibrary.filter(i => i.sources?.includes('spotify')).length}
+                    <p className="text-3xl font-bold text-blue-400">{totalPlays.toLocaleString()}</p>
+                    <p className="text-sm text-zinc-500 flex items-center justify-center gap-1">
+                        <Play className="w-3 h-3" />
+                        Total Plays
                     </p>
-                    <p className="text-sm text-zinc-500">From Spotify</p>
+                </div>
+                <div className="bento-card text-center">
+                    <p className="text-3xl font-bold text-green-400">{totalLikes}</p>
+                    <p className="text-sm text-zinc-500 flex items-center justify-center gap-1">
+                        <Heart className="w-3 h-3" />
+                        Total Likes
+                    </p>
                 </div>
             </div>
 
@@ -210,7 +289,7 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
                     <Search className="w-4 h-4 text-zinc-400" />
                     <input
                         type="text"
-                        placeholder="Search songs or artists..."
+                        placeholder="Search songs, artists, albums..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="bg-transparent text-sm text-white placeholder-zinc-500 outline-none w-full"
@@ -250,6 +329,8 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
                     <option value="recent">Recently Added</option>
                     <option value="title">Title A-Z</option>
                     <option value="artist">Artist A-Z</option>
+                    <option value="plays">Most Played</option>
+                    <option value="likes">Most Liked</option>
                 </select>
 
                 {/* Clear Filters */}
@@ -270,6 +351,18 @@ export default function LibraryPageClient({ initialLibrary }: LibraryPageClientP
                     Showing {filteredLibrary.length} of {initialLibrary.length} songs
                 </p>
             )}
+
+            {/* Table Header */}
+            <div className="flex items-center gap-4 px-3 py-2 text-xs text-zinc-500 uppercase tracking-wider border-b border-white/[0.08]">
+                <div className="w-12"></div>
+                <div className="flex-1">Song / Artist</div>
+                <div className="w-14 text-center">Duration</div>
+                <div className="w-36">Genre</div>
+                <div className="w-28">Source</div>
+                <div className="w-24 text-center">Stats</div>
+                <div className="w-16 text-center">Users</div>
+                <div className="w-20 text-right">Added</div>
+            </div>
 
             {/* Library Grid */}
             <div className="space-y-2 max-h-[600px] overflow-y-auto">

@@ -1,35 +1,18 @@
 'use client';
 
-import { Cog, RotateCcw, CheckCircle, XCircle, Activity, Clock, Server, Globe, Bot } from 'lucide-react';
-import { useState } from 'react';
+import { Cog, RotateCcw, CheckCircle, XCircle, Activity, Clock, Bot, Globe, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface Service {
     id: string;
     name: string;
     description: string;
-    status: 'online' | 'offline' | 'restarting';
+    status: 'online' | 'offline' | 'restarting' | 'starting';
     uptime?: string;
-    icon: React.ElementType;
+    restartable: boolean;
 }
 
-const services: Service[] = [
-    {
-        id: 'bot',
-        name: 'Discord Bot',
-        description: 'Core Discord bot handling commands and audio playback',
-        status: 'online',
-        uptime: '2d 14h 32m',
-        icon: Bot,
-    },
-    {
-        id: 'dashboard',
-        name: 'Dashboard',
-        description: 'This Next.js web dashboard',
-        status: 'online',
-        uptime: 'Running',
-        icon: Globe,
-    },
-];
+const BOT_API_URL = process.env.NEXT_PUBLIC_BOT_API_URL || 'http://localhost:8080';
 
 function ServiceCard({
     service,
@@ -40,19 +23,23 @@ function ServiceCard({
     onRestart: () => void;
     isRestarting: boolean;
 }) {
-    const Icon = service.icon;
+    const Icon = service.id === 'bot' ? Bot : Globe;
 
     const statusColors = {
         online: 'bg-green-500',
         offline: 'bg-red-500',
         restarting: 'bg-yellow-500',
+        starting: 'bg-yellow-500',
     };
 
     const statusText = {
         online: 'Online',
         offline: 'Offline',
         restarting: 'Restarting...',
+        starting: 'Starting...',
     };
+
+    const actualStatus = isRestarting ? 'restarting' : service.status;
 
     return (
         <div className="bento-card">
@@ -67,8 +54,8 @@ function ServiceCard({
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${statusColors[service.status]} animate-pulse`} />
-                    <span className="text-sm text-zinc-400">{statusText[service.status]}</span>
+                    <div className={`w-2 h-2 rounded-full ${statusColors[actualStatus]} animate-pulse`} />
+                    <span className="text-sm text-zinc-400">{statusText[actualStatus]}</span>
                 </div>
             </div>
 
@@ -82,11 +69,11 @@ function ServiceCard({
 
                 <button
                     onClick={onRestart}
-                    disabled={isRestarting || service.id === 'dashboard'}
+                    disabled={isRestarting || !service.restartable}
                     className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all
             ${isRestarting
                             ? 'bg-yellow-500/20 text-yellow-500 cursor-not-allowed'
-                            : service.id === 'dashboard'
+                            : !service.restartable
                                 ? 'bg-zinc-500/20 text-zinc-500 cursor-not-allowed'
                                 : 'bg-violet-500/20 text-violet-400 hover:bg-violet-500/30'
                         }`}
@@ -100,23 +87,72 @@ function ServiceCard({
 }
 
 export default function ServicesPage() {
+    const [services, setServices] = useState<Service[]>([]);
     const [restartingServices, setRestartingServices] = useState<Set<string>>(new Set());
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const fetchServices = useCallback(async () => {
+        try {
+            const response = await fetch(`${BOT_API_URL}/api/services`);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch services: ${response.status}`);
+            }
+            const data = await response.json();
+            setServices(data.services || []);
+            setError(null);
+        } catch (err) {
+            console.error('Failed to fetch services:', err);
+            setError('Failed to connect to bot API');
+            // Set fallback services when API is unavailable
+            setServices([
+                {
+                    id: 'bot',
+                    name: 'Discord Bot',
+                    description: 'Core Discord bot handling commands and audio playback',
+                    status: 'offline',
+                    uptime: '—',
+                    restartable: true,
+                },
+                {
+                    id: 'dashboard',
+                    name: 'Dashboard',
+                    description: 'This Next.js web dashboard',
+                    status: 'online',
+                    uptime: 'Running',
+                    restartable: false,
+                },
+            ]);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchServices();
+        // Refresh every 30 seconds
+        const interval = setInterval(fetchServices, 30000);
+        return () => clearInterval(interval);
+    }, [fetchServices]);
 
     const handleRestart = async (serviceId: string) => {
         setRestartingServices(prev => new Set(prev).add(serviceId));
 
         try {
-            // Call the Python bot's restart endpoint
-            const response = await fetch(`http://localhost:8080/api/services/${serviceId}/restart`, {
+            const response = await fetch(`${BOT_API_URL}/api/services/${serviceId}/restart`, {
                 method: 'POST',
             });
 
             if (!response.ok) {
-                throw new Error('Restart failed');
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.error || 'Restart failed');
             }
 
-            // Wait a bit for the service to restart
+            // Wait for the service to restart
             await new Promise(resolve => setTimeout(resolve, 5000));
+
+            // Refresh services list
+            await fetchServices();
 
         } catch (error) {
             console.error('Failed to restart service:', error);
@@ -128,6 +164,9 @@ export default function ServicesPage() {
             });
         }
     };
+
+    const onlineCount = services.filter(s => s.status === 'online').length;
+    const offlineCount = services.filter(s => s.status === 'offline').length;
 
     return (
         <div className="space-y-6">
@@ -142,7 +181,28 @@ export default function ServicesPage() {
                         Manage and monitor running services
                     </p>
                 </div>
+                <button
+                    onClick={fetchServices}
+                    disabled={loading}
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-zinc-400 hover:text-white hover:border-white/[0.16] transition-colors"
+                >
+                    <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    Refresh
+                </button>
             </div>
+
+            {/* Error Banner */}
+            {error && (
+                <div className="bento-card bg-red-500/10 border-red-500/30">
+                    <div className="flex items-center gap-3">
+                        <XCircle className="w-5 h-5 text-red-500" />
+                        <div>
+                            <p className="text-sm font-medium text-red-400">{error}</p>
+                            <p className="text-xs text-zinc-500">Make sure the bot is running and accessible</p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Overview Cards */}
             <div className="grid grid-cols-3 gap-4">
@@ -151,9 +211,7 @@ export default function ServicesPage() {
                         <CheckCircle className="w-6 h-6 text-green-500" />
                     </div>
                     <div>
-                        <p className="text-2xl font-bold text-white">
-                            {services.filter(s => s.status === 'online').length}
-                        </p>
+                        <p className="text-2xl font-bold text-white">{onlineCount}</p>
                         <p className="text-sm text-zinc-500">Services Online</p>
                     </div>
                 </div>
@@ -163,9 +221,7 @@ export default function ServicesPage() {
                         <XCircle className="w-6 h-6 text-red-500" />
                     </div>
                     <div>
-                        <p className="text-2xl font-bold text-white">
-                            {services.filter(s => s.status === 'offline').length}
-                        </p>
+                        <p className="text-2xl font-bold text-white">{offlineCount}</p>
                         <p className="text-sm text-zinc-500">Services Offline</p>
                     </div>
                 </div>
@@ -182,16 +238,32 @@ export default function ServicesPage() {
             </div>
 
             {/* Service Cards */}
-            <div className="space-y-4">
-                {services.map((service) => (
-                    <ServiceCard
-                        key={service.id}
-                        service={service}
-                        onRestart={() => handleRestart(service.id)}
-                        isRestarting={restartingServices.has(service.id)}
-                    />
-                ))}
-            </div>
+            {loading ? (
+                <div className="space-y-4">
+                    {[1, 2].map((i) => (
+                        <div key={i} className="bento-card animate-pulse">
+                            <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 rounded-xl bg-white/[0.08]" />
+                                <div className="flex-1 space-y-2">
+                                    <div className="h-5 w-32 bg-white/[0.08] rounded" />
+                                    <div className="h-4 w-64 bg-white/[0.08] rounded" />
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    {services.map((service) => (
+                        <ServiceCard
+                            key={service.id}
+                            service={service}
+                            onRestart={() => handleRestart(service.id)}
+                            isRestarting={restartingServices.has(service.id)}
+                        />
+                    ))}
+                </div>
+            )}
 
             {/* Info */}
             <div className="bento-card bg-blue-500/5 border-blue-500/20">

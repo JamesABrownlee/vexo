@@ -2,7 +2,10 @@
 Settings Cog - Server settings commands
 """
 import logging
+import os
+import socket
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -170,7 +173,6 @@ class SettingsCog(commands.Cog):
         logger.warning(f"Bot restart requested by {interaction.user} ({interaction.user.id})")
         
         # Try Docker restart first
-        import os
         if os.path.exists("/var/run/docker.sock"):
             try:
                 hostname = socket.gethostname()

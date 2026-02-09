@@ -185,6 +185,10 @@ class DashboardCog(commands.Cog):
         self.app.router.add_post("/api/settings/global", self._handle_global_settings)
         self.app.router.add_get("/api/notifications", self._handle_notifications)
         self.app.router.add_post("/api/guilds/{guild_id}/leave", self._handle_leave_guild)
+        
+        # Service management
+        self.app.router.add_get("/api/services", self._handle_services_list)
+        self.app.router.add_post("/api/services/{service_id}/restart", self._handle_service_restart)
 
     def _is_loopback(self, request: web.Request) -> bool:
         remote = request.remote or ""
@@ -877,6 +881,95 @@ class DashboardCog(commands.Cog):
         finally:
             self.ws_manager.clients.discard(ws)
         return ws
+
+    async def _handle_services_list(self, request: web.Request) -> web.Response:
+        """Get list of services and their status."""
+        import psutil
+        import time
+        
+        process = psutil.Process()
+        uptime_seconds = time.time() - process.create_time()
+        
+        # Format uptime
+        days = int(uptime_seconds // 86400)
+        hours = int((uptime_seconds % 86400) // 3600)
+        mins = int((uptime_seconds % 3600) // 60)
+        if days > 0:
+            uptime_str = f"{days}d {hours}h {mins}m"
+        elif hours > 0:
+            uptime_str = f"{hours}h {mins}m"
+        else:
+            uptime_str = f"{mins}m"
+        
+        services = [
+            {
+                "id": "bot",
+                "name": "Discord Bot",
+                "description": "Core Discord bot handling commands and audio playback",
+                "status": "online" if self.bot.is_ready() else "starting",
+                "uptime": uptime_str,
+                "restartable": True,
+            },
+            {
+                "id": "dashboard",
+                "name": "Dashboard API",
+                "description": "Web API for the dashboard",
+                "status": "online",
+                "uptime": uptime_str,
+                "restartable": False,
+            },
+        ]
+        
+        return web.json_response({"services": services})
+    
+    async def _handle_service_restart(self, request: web.Request) -> web.Response:
+        """Restart a service."""
+        if not self._is_admin(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        
+        service_id = request.match_info["service_id"]
+        
+        if service_id == "bot":
+            log.event(Category.SYSTEM, "bot_restart_requested", source="dashboard_api")
+            
+            # Try Docker restart first
+            import os
+            import socket
+            import aiohttp
+            
+            if os.path.exists("/var/run/docker.sock"):
+                try:
+                    hostname = socket.gethostname()
+                    connector = aiohttp.UnixConnector(path="/var/run/docker.sock")
+                    async with aiohttp.ClientSession(connector=connector) as session:
+                        url = f"http://localhost/containers/{hostname}/restart"
+                        async with session.post(url) as resp:
+                            if resp.status == 204:
+                                log.event(Category.SYSTEM, "docker_restart_sent")
+                                return web.json_response({"status": "restarting", "method": "docker"})
+                            else:
+                                text = await resp.text()
+                                log.warning_cat(Category.SYSTEM, f"Docker restart failed: {resp.status} - {text}")
+                except Exception as e:
+                    log.warning_cat(Category.SYSTEM, f"Failed to restart via Docker socket: {e}")
+            
+            # Fallback to process exit (supervisor/docker will restart)
+            async def do_restart():
+                await asyncio.sleep(0.5)
+                try:
+                    await self.bot.close()
+                except Exception:
+                    pass
+                os._exit(0)
+            
+            asyncio.create_task(do_restart())
+            return web.json_response({"status": "restarting", "method": "process_exit"})
+        
+        elif service_id == "dashboard":
+            return web.json_response({"error": "Dashboard cannot restart itself"}, status=400)
+        
+        else:
+            return web.json_response({"error": "Unknown service"}, status=404)
 
 
 async def setup(bot: commands.Bot):

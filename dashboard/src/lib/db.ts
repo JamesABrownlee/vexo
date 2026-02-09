@@ -345,10 +345,18 @@ export async function getLibrary(limit = 200) {
       s.id,
       s.title,
       s.artist_name,
+      s.album,
+      s.release_year,
+      s.duration_seconds,
+      s.canonical_yt_id as yt_id,
+      s.spotify_id,
       (SELECT GROUP_CONCAT(DISTINCT sg.genre) FROM song_genres sg WHERE sg.song_id = s.id) as genre,
       GROUP_CONCAT(DISTINCT u.username) as contributors,
       GROUP_CONCAT(DISTINCT l.source) as sources,
-      MAX(l.added_at) as last_added
+      MAX(l.added_at) as last_added,
+      (SELECT COUNT(*) FROM playback_history ph WHERE ph.song_id = s.id) as play_count,
+      (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id AND sr.reaction = 'like') as like_count,
+      (SELECT COUNT(*) FROM song_reactions sr WHERE sr.song_id = s.id AND sr.reaction = 'dislike') as dislike_count
     FROM songs s
     JOIN song_library_entries l ON s.id = l.song_id
     JOIN users u ON l.user_id = u.id
