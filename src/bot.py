@@ -227,7 +227,7 @@ class MusicBot(commands.Bot):
         song_crud = SongCRUD(self.db)
         user_crud = UserCRUD(self.db)
         
-        # Initialize discovery engine
+        # Initialize discovery engine (128-dim vector scoring)
         self.discovery = DiscoveryEngine(
             youtube=self.youtube,
             spotify=self.spotify,
@@ -235,6 +235,7 @@ class MusicBot(commands.Bot):
             preference_crud=pref_crud,
             playback_crud=playback_crud,
             reaction_crud=reaction_crud,
+            song_crud=song_crud,
         )
         
         # Initialize preference manager
