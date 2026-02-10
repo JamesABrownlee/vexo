@@ -418,7 +418,11 @@ class MusicCog(commands.Cog):
             timeout = aiohttp.ClientTimeout(total=3)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, json=payload) as resp:
-                    await resp.read()
+                    body = None
+                    try:
+                        body = await resp.text()
+                    except Exception:
+                        await resp.read()
                     ms = int((time.perf_counter() - t0) * 1000)
                     if 200 <= resp.status < 300:
                         self._radio_presenter_enabled = True
@@ -444,6 +448,9 @@ class MusicCog(commands.Cog):
                             disabled_for_s=300,
                             ms=ms,
                             url=url,
+                            response=(body[:500] if isinstance(body, str) else None),
+                            song=item.title,
+                            artist=item.artist,
                         )
         except Exception as e:
             self._radio_presenter_enabled = False
