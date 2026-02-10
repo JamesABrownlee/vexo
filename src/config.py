@@ -31,6 +31,10 @@ class Config:
     # Optional: YouTube cookies for age-restricted content
     YTDL_COOKIES_PATH: str | None
     YTDL_PO_TOKEN: str | None
+
+    # Optional: Radio presenter / TTS integration
+    RADIO_PRESENTER_API_URL: str | None
+    RADIO_PRESENTER_VOICE: str | None
     
     @classmethod
     def from_env(cls) -> "Config":
@@ -57,6 +61,8 @@ class Config:
             WEB_ADMIN_TOKEN=os.getenv("WEB_ADMIN_TOKEN"),
             YTDL_COOKIES_PATH=os.getenv("YTDL_COOKIES_PATH"),
             YTDL_PO_TOKEN=os.getenv("YTDL_PO_TOKEN"),
+            RADIO_PRESENTER_API_URL=os.getenv("RADIO_PRESENTER_API_URL", "http://radio-presenter:5090/api/radio-presenter"),
+            RADIO_PRESENTER_VOICE=os.getenv("RADIO_PRESENTER_VOICE"),
         )
 
 

@@ -5,7 +5,9 @@ import collections
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, UTC
 from typing import Optional
+from urllib.parse import urlparse
 
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -192,17 +194,34 @@ class MusicCog(commands.Cog):
         self.players: dict[int, GuildPlayer] = {}
         self.youtube = YouTubeService()
         self._idle_check_task: asyncio.Task | None = None
-    
+        self._radio_presenter_task: asyncio.Task | None = None
+        self._radio_presenter_enabled: bool | None = None  # unknown until checked
+        self._radio_presenter_disabled_until: datetime | None = None
+        self._radio_presenter_last_error: str | None = None
+
     async def cog_load(self):
         """Called when the cog is loaded."""
         self._idle_check_task = asyncio.create_task(self._idle_check_loop())
+
+        # Radio presenter health check loop (optional)
+        try:
+            from src.config import config
+
+            if getattr(config, "RADIO_PRESENTER_API_URL", None):
+                if not self._radio_presenter_task or self._radio_presenter_task.done():
+                    self._radio_presenter_task = asyncio.create_task(self._radio_presenter_health_loop())
+        except Exception:
+            pass
+
         log.event(Category.SYSTEM, Event.COG_LOADED, cog="music")
     
     async def cog_unload(self):
         """Called when the cog is unloaded."""
         if self._idle_check_task:
             self._idle_check_task.cancel()
-        
+        if self._radio_presenter_task:
+            self._radio_presenter_task.cancel()
+
         # Disconnect from all voice channels
         for player in self.players.values():
             if player.voice_client:
@@ -281,6 +300,175 @@ class MusicCog(commands.Cog):
         except Exception as e:
             log.error_cat(Category.PLAYBACK, "Stream resolution failed", error=str(e))
             return None
+
+    async def _notify_radio_presenter(self, player: GuildPlayer, item: QueueItem) -> None:
+        """Notify external radio-presenter/TTS service that a song is starting."""
+        try:
+            from src.config import config
+
+            url = getattr(config, "RADIO_PRESENTER_API_URL", None)
+            if not url:
+                return
+
+            now = datetime.now(UTC)
+            if self._radio_presenter_disabled_until and now < self._radio_presenter_disabled_until:
+                return
+
+            # If we haven't checked connectivity yet, do a quick TCP probe once.
+            if self._radio_presenter_enabled is None:
+                ok = await self._radio_presenter_can_connect(url)
+                self._radio_presenter_enabled = ok
+                if not ok:
+                    self._radio_presenter_disabled_until = now + timedelta(seconds=300)
+                    self._radio_presenter_last_error = "initial_connect_failed"
+                    log.warning_cat(
+                        Category.API,
+                        "radio_presenter_disabled",
+                        guild_id=player.guild_id,
+                        reason="initial_connect_failed",
+                        disabled_for_s=300,
+                        url=url,
+                    )
+                    return
+            elif self._radio_presenter_enabled is False:
+                return
+
+            voice_channel_id = None
+            if player.voice_client and getattr(player.voice_client, "channel", None):
+                voice_channel_id = player.voice_client.channel.id
+
+            requested_by = None
+            if item.requester_id and player.voice_client and player.voice_client.guild:
+                member = player.voice_client.guild.get_member(item.requester_id)
+                requested_by = member.display_name if member else None
+            if requested_by is None and item.requester_id:
+                u = self.bot.get_user(item.requester_id)
+                requested_by = u.display_name if u else None
+
+            song_for = None
+            if item.for_user_id and player.voice_client and player.voice_client.guild:
+                member = player.voice_client.guild.get_member(item.for_user_id)
+                song_for = member.display_name if member else None
+            if song_for is None and item.for_user_id:
+                u = self.bot.get_user(item.for_user_id)
+                song_for = u.display_name if u else None
+
+            voice_id = getattr(config, "RADIO_PRESENTER_VOICE", None) or None
+            if hasattr(self.bot, "db") and self.bot.db:
+                try:
+                    guild_crud = GuildCRUD(self.bot.db)
+                    setting = await guild_crud.get_setting(player.guild_id, "radio_presenter_voice")
+                    if setting:
+                        voice_id = str(setting).strip() or voice_id
+                except Exception:
+                    pass
+
+            payload = {
+                "song_name": item.title,
+                "artist": item.artist,
+                "guild_id": str(player.guild_id),
+                "channel_id": voice_channel_id,
+                "voice": voice_id,
+                "requested_by": requested_by,
+                "song_for": song_for,
+            }
+
+            t0 = time.perf_counter()
+            timeout = aiohttp.ClientTimeout(total=3)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload) as resp:
+                    await resp.read()
+                    ms = int((time.perf_counter() - t0) * 1000)
+                    if 200 <= resp.status < 300:
+                        self._radio_presenter_enabled = True
+                        self._radio_presenter_last_error = None
+                        log.info_cat(
+                            Category.API,
+                            "radio_presenter_notified",
+                            guild_id=player.guild_id,
+                            status=resp.status,
+                            ms=ms,
+                            song=item.title,
+                            artist=item.artist,
+                        )
+                    else:
+                        self._radio_presenter_enabled = False
+                        self._radio_presenter_disabled_until = datetime.now(UTC) + timedelta(seconds=300)
+                        self._radio_presenter_last_error = f"http_{resp.status}"
+                        log.warning_cat(
+                            Category.API,
+                            "radio_presenter_disabled",
+                            guild_id=player.guild_id,
+                            reason=f"http_{resp.status}",
+                            disabled_for_s=300,
+                            ms=ms,
+                            url=url,
+                        )
+        except Exception as e:
+            self._radio_presenter_enabled = False
+            self._radio_presenter_disabled_until = datetime.now(UTC) + timedelta(seconds=300)
+            self._radio_presenter_last_error = str(e)
+            log.debug_cat(
+                Category.API,
+                "radio_presenter_notify_failed",
+                guild_id=player.guild_id,
+                error=str(e),
+                song=getattr(item, "title", None),
+            )
+
+    async def _radio_presenter_can_connect(self, url: str) -> bool:
+        """Check if the radio presenter host/port is reachable via TCP."""
+        try:
+            parsed = urlparse(url)
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if not host:
+                return False
+
+            async def _probe():
+                reader, writer = await asyncio.open_connection(host, port)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+            await asyncio.wait_for(_probe(), timeout=1.5)
+            return True
+        except Exception:
+            return False
+
+    async def _radio_presenter_health_loop(self) -> None:
+        """Periodically check connectivity and re-enable the integration when it comes back."""
+        await asyncio.sleep(2)
+        while True:
+            try:
+                from src.config import config
+
+                url = getattr(config, "RADIO_PRESENTER_API_URL", None)
+                if not url:
+                    self._radio_presenter_enabled = None
+                    await asyncio.sleep(30)
+                    continue
+
+                ok = await self._radio_presenter_can_connect(url)
+                if ok:
+                    if self._radio_presenter_enabled is False:
+                        log.info_cat(Category.API, "radio_presenter_reenabled", url=url)
+                    self._radio_presenter_enabled = True
+                    self._radio_presenter_disabled_until = None
+                    self._radio_presenter_last_error = None
+                else:
+                    if self._radio_presenter_enabled is True:
+                        log.warning_cat(Category.API, "radio_presenter_unreachable", url=url)
+                    self._radio_presenter_enabled = False
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.debug_cat(Category.API, "radio_presenter_health_check_failed", error=str(e))
+
+            await asyncio.sleep(60)
     
 
     # ==================== PLAYBACK LOOP ====================
@@ -351,6 +539,7 @@ class MusicCog(commands.Cog):
                     player.start_time = datetime.now(UTC)
 
                     asyncio.create_task(self._spotify_enrich_and_refresh_now_playing(player, item))
+                    asyncio.create_task(self._notify_radio_presenter(player, item))
                     await self._notify_now_playing(player)
                     
                     max_wait = (item.duration_seconds or 600) + 60

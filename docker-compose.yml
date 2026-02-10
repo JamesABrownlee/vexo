@@ -11,6 +11,8 @@ services:
       - WEB_HOST=0.0.0.0
       - WEB_PORT=8080
       - DATABASE_PATH=/app/data/musicbot.db
+      - RADIO_PRESENTER_API_URL=${RADIO_PRESENTER_API_URL:-http://radio-presenter:5090/api/radio-presenter}
+      - RADIO_PRESENTER_VOICE=${RADIO_PRESENTER_VOICE}
     volumes:
       - ./data:/app/data
     ports:
