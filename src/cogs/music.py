@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import collections
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, UTC
 from typing import Optional
@@ -122,6 +123,25 @@ class MusicCog(commands.Cog):
     DISCOVERY_TIMEOUT = 20  # Max seconds for discovery operation
     MAX_CONSECUTIVE_FAILURES = 3  # Auto-restart playback loop after this many failures
     SPOTIFY_ENRICH_TIMEOUT = 6  # Seconds; runs in background to avoid delaying playback
+
+    # Radio presenter / DJ intro announcement policy:
+    # - Always announce user-requested tracks
+    # - Otherwise announce randomly 1 in N tracks
+    RADIO_PRESENTER_RANDOM_ANNOUNCE_DENOMINATOR = 5
+
+    @staticmethod
+    def _is_user_requested(item: QueueItem) -> bool:
+        # requester_id is set for /play and other explicit user queueing.
+        # discovery/autoplay items typically have requester_id=None.
+        return bool(item.requester_id) or item.discovery_source == "user_request"
+
+    def _should_announce_radio_presenter(self, item: QueueItem) -> tuple[bool, str, int | None]:
+        if self._is_user_requested(item):
+            return True, "user_requested", None
+
+        denom = max(1, int(self.RADIO_PRESENTER_RANDOM_ANNOUNCE_DENOMINATOR))
+        roll = random.randrange(denom)
+        return (roll == 0), f"random_1_in_{denom}", roll
     
     @staticmethod
     def _build_ffmpeg_options(stream_info: StreamInfo, bitrate: int = 128) -> dict:
@@ -608,7 +628,20 @@ class MusicCog(commands.Cog):
                     player.start_time = datetime.now(UTC)
 
                     asyncio.create_task(self._spotify_enrich_and_refresh_now_playing(player, item))
-                    asyncio.create_task(self._notify_radio_presenter(player, item))
+
+                    should_announce, announce_reason, roll = self._should_announce_radio_presenter(item)
+                    if should_announce:
+                        asyncio.create_task(self._notify_radio_presenter(player, item))
+                    else:
+                        log.debug_cat(
+                            Category.API,
+                            "radio_presenter_announce_skipped",
+                            guild_id=player.guild_id,
+                            reason=announce_reason,
+                            roll=roll,
+                            song=item.title,
+                            artist=item.artist,
+                        )
                     await self._notify_now_playing(player)
                     
                     max_wait = (item.duration_seconds or 600) + 60
