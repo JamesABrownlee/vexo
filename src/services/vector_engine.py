@@ -250,6 +250,11 @@ def encode_song(
             v[dim] = 1.0
 
     # ── Temporal features [80:96) ──
+    if year is not None:
+        try:
+            year = int(year)
+        except (ValueError, TypeError):
+            year = None
     if year and 1950 <= year <= 2030:
         # Coarse: decade bucket
         decade_idx = min((year - 1950) // 10, 7)
@@ -259,6 +264,10 @@ def encode_song(
         v[TEMPORAL_START + 8 + decade_idx] = year_frac
 
     # ── Popularity / energy [96:112) ──
+    try:
+        popularity = float(popularity)
+    except (ValueError, TypeError):
+        popularity = 0.5
     pop = max(0.0, min(1.0, popularity))
     v[ENERGY_START] = pop
     # Popularity bucket one-hot
