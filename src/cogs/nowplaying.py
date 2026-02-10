@@ -586,7 +586,7 @@ class NowPlayingCog(commands.Cog):
 
         loading_embed = discord.Embed(
             title="🎵 Now Playing",
-            description=f"<a:loadingload:1470532660781908081>",
+            description=f"<a:loadingload:1470532660781908081>\nTrack: **{item.title}**\nArtist: {item.artist}",
             color=0x7c3aed,
         )
         if item.discovery_reason:
