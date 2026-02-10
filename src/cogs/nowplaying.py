@@ -170,7 +170,7 @@ class NowPlayingView(discord.ui.View):
         except Exception:
             return
 
-    @discord.ui.button(emoji="⏸", style=discord.ButtonStyle.secondary, custom_id="np:pause_resume")
+    @discord.ui.button(emoji="<:pause1:1470585635386556527>", style=discord.ButtonStyle.secondary, custom_id="np:pause_resume")
     async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
         with log.span(
             Category.USER,
