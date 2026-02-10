@@ -61,7 +61,7 @@ class Config:
             WEB_ADMIN_TOKEN=os.getenv("WEB_ADMIN_TOKEN"),
             YTDL_COOKIES_PATH=os.getenv("YTDL_COOKIES_PATH"),
             YTDL_PO_TOKEN=os.getenv("YTDL_PO_TOKEN"),
-            RADIO_PRESENTER_API_URL=os.getenv("RADIO_PRESENTER_API_URL", "http://radio-presenter:5090/api/radio-presenter"),
+            RADIO_PRESENTER_API_URL=os.getenv("RADIO_PRESENTER_API_URL", "http://100.97.230.126:3050/api/radio-presenter"),
             RADIO_PRESENTER_VOICE=os.getenv("RADIO_PRESENTER_VOICE"),
         )
 

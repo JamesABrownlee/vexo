@@ -198,22 +198,45 @@ class MusicCog(commands.Cog):
         self._radio_presenter_enabled: bool | None = None  # unknown until checked
         self._radio_presenter_disabled_until: datetime | None = None
         self._radio_presenter_last_error: str | None = None
+        self._background_tasks_started: bool = False
 
-    async def cog_load(self):
-        """Called when the cog is loaded."""
-        self._idle_check_task = asyncio.create_task(self._idle_check_loop())
+    def _start_background_tasks(self, *, reason: str) -> None:
+        if self._background_tasks_started:
+            return
+        self._background_tasks_started = True
+
+        if not self._idle_check_task or self._idle_check_task.done():
+            self._idle_check_task = asyncio.create_task(self._idle_check_loop())
+            log.info_cat(Category.SYSTEM, "idle_check_loop_started", reason=reason)
 
         # Radio presenter health check loop (optional)
         try:
             from src.config import config
 
-            if getattr(config, "RADIO_PRESENTER_API_URL", None):
-                if not self._radio_presenter_task or self._radio_presenter_task.done():
-                    self._radio_presenter_task = asyncio.create_task(self._radio_presenter_health_loop())
-        except Exception:
-            pass
+            url = getattr(config, "RADIO_PRESENTER_API_URL", None)
+            if not url:
+                log.info_cat(Category.API, "radio_presenter_disabled", reason="no_url", started_by=reason)
+                return
+
+            log.info_cat(Category.API, "radio_presenter_health_init", url=url, started_by=reason)
+            if not self._radio_presenter_task or self._radio_presenter_task.done():
+                self._radio_presenter_task = asyncio.create_task(self._radio_presenter_health_loop())
+                log.info_cat(Category.API, "radio_presenter_health_loop_scheduled", url=url)
+            # Kick an immediate check so logs show status right after startup/reload.
+            asyncio.create_task(self._radio_presenter_check_once())
+        except Exception as e:
+            log.warning_cat(Category.API, "radio_presenter_init_failed", error=str(e), started_by=reason)
+
+    async def cog_load(self):
+        """Called when the cog is loaded."""
+        self._start_background_tasks(reason="cog_load")
 
         log.event(Category.SYSTEM, Event.COG_LOADED, cog="music")
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Some discord forks/versions do not reliably call cog_load on reload.
+        self._start_background_tasks(reason="on_ready")
     
     async def cog_unload(self):
         """Called when the cog is unloaded."""
@@ -221,6 +244,7 @@ class MusicCog(commands.Cog):
             self._idle_check_task.cancel()
         if self._radio_presenter_task:
             self._radio_presenter_task.cancel()
+        self._background_tasks_started = False
 
         # Disconnect from all voice channels
         for player in self.players.values():
@@ -308,10 +332,18 @@ class MusicCog(commands.Cog):
 
             url = getattr(config, "RADIO_PRESENTER_API_URL", None)
             if not url:
+                log.debug_cat(Category.API, "radio_presenter_notify_skipped", reason="no_url")
                 return
 
             now = datetime.now(UTC)
             if self._radio_presenter_disabled_until and now < self._radio_presenter_disabled_until:
+                log.debug_cat(
+                    Category.API,
+                    "radio_presenter_notify_skipped",
+                    reason="disabled_until",
+                    disabled_until=self._radio_presenter_disabled_until.isoformat(),
+                    url=url,
+                )
                 return
 
             # If we haven't checked connectivity yet, do a quick TCP probe once.
@@ -331,6 +363,7 @@ class MusicCog(commands.Cog):
                     )
                     return
             elif self._radio_presenter_enabled is False:
+                log.debug_cat(Category.API, "radio_presenter_notify_skipped", reason="unreachable", url=url)
                 return
 
             voice_channel_id = None
@@ -373,6 +406,14 @@ class MusicCog(commands.Cog):
                 "song_for": song_for,
             }
 
+            log.debug_cat(
+                Category.API,
+                "radio_presenter_notify_start",
+                guild_id=player.guild_id,
+                url=url,
+                song=item.title,
+                artist=item.artist,
+            )
             t0 = time.perf_counter()
             timeout = aiohttp.ClientTimeout(total=3)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -408,7 +449,7 @@ class MusicCog(commands.Cog):
             self._radio_presenter_enabled = False
             self._radio_presenter_disabled_until = datetime.now(UTC) + timedelta(seconds=300)
             self._radio_presenter_last_error = str(e)
-            log.debug_cat(
+            log.warning_cat(
                 Category.API,
                 "radio_presenter_notify_failed",
                 guild_id=player.guild_id,
@@ -440,7 +481,9 @@ class MusicCog(commands.Cog):
 
     async def _radio_presenter_health_loop(self) -> None:
         """Periodically check connectivity and re-enable the integration when it comes back."""
+        log.info_cat(Category.API, "radio_presenter_health_loop_started")
         await asyncio.sleep(2)
+        first = True
         while True:
             try:
                 from src.config import config
@@ -462,6 +505,9 @@ class MusicCog(commands.Cog):
                     if self._radio_presenter_enabled is True:
                         log.warning_cat(Category.API, "radio_presenter_unreachable", url=url)
                     self._radio_presenter_enabled = False
+                if first:
+                    first = False
+                    log.info_cat(Category.API, "radio_presenter_health_status", url=url, ok=ok)
 
             except asyncio.CancelledError:
                 raise
@@ -469,6 +515,22 @@ class MusicCog(commands.Cog):
                 log.debug_cat(Category.API, "radio_presenter_health_check_failed", error=str(e))
 
             await asyncio.sleep(60)
+
+    async def _radio_presenter_check_once(self) -> None:
+        """One-shot health check for visibility on startup/reload."""
+        try:
+            from src.config import config
+
+            url = getattr(config, "RADIO_PRESENTER_API_URL", None)
+            if not url:
+                log.info_cat(Category.API, "radio_presenter_check_skipped", reason="no_url")
+                return
+
+            ok = await self._radio_presenter_can_connect(url)
+            self._radio_presenter_enabled = ok if self._radio_presenter_enabled is None else self._radio_presenter_enabled
+            log.info_cat(Category.API, "radio_presenter_check", url=url, ok=ok)
+        except Exception as e:
+            log.debug_cat(Category.API, "radio_presenter_check_failed", error=str(e))
     
 
     # ==================== PLAYBACK LOOP ====================
