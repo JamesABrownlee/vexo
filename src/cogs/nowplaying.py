@@ -170,7 +170,7 @@ class NowPlayingView(discord.ui.View):
         except Exception:
             return
 
-    @discord.ui.button(emoji="<:pause1:1470585635386556527>", style=discord.ButtonStyle.secondary, custom_id="np:pause_resume")
+    @discord.ui.button(emoji="⏸", style=discord.ButtonStyle.secondary, custom_id="np:pause_resume")
     async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
         with log.span(
             Category.USER,
@@ -855,14 +855,34 @@ class NowPlayingCog(commands.Cog):
                     except Exception:
                         pass
         except Exception as e:
-            # Keep the loading embed; optionally update it to show the failure.
+            # If we already have an attachment on the message, don't overwrite with an "artwork unavailable" embed.
+            # This can happen if the image was posted successfully but an edit step failed afterward.
             try:
+                if getattr(msg, "attachments", None):
+                    log.debug_cat(
+                        Category.SYSTEM,
+                        "now_playing_image_swap_failed_but_attachment_present",
+                        guild_id=guild_id,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                        video_id=video_id,
+                        error=str(e),
+                    )
+                    try:
+                        await msg.edit(view=view)
+                    except Exception:
+                        pass
+                    return
+
                 err_embed = discord.Embed(
                     title="🎵 Now Playing",
                     description=f"**{item.title}**\n{item.artist}\n\n⚠️ Artwork unavailable.",
                     color=0x7c3aed,
                 )
-                await msg.edit(embed=err_embed, view=view)
+                try:
+                    await msg.edit(embed=err_embed, view=view, attachments=[])
+                except TypeError:
+                    await msg.edit(embed=err_embed, view=view)
             except Exception:
                 pass
 
