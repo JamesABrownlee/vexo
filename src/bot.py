@@ -214,7 +214,7 @@ class MusicBot(commands.Bot):
         # Initialize database
         from src.config import config
         from src.database.connection import DatabaseManager
-        from src.database.crud import SongCRUD, UserCRUD, GuildCRUD, PlaybackCRUD, PreferenceCRUD, ReactionCRUD
+        from src.database.crud import SongCRUD, UserCRUD, GuildCRUD, PlaybackCRUD, PreferenceCRUD, ReactionCRUD, LibraryCRUD
         
         self.db = await DatabaseManager.create(config.DATABASE_PATH)
         log.event(Category.DATABASE, "initialized", path=config.DATABASE_PATH)
@@ -237,6 +237,7 @@ class MusicBot(commands.Bot):
         reaction_crud = ReactionCRUD(self.db)
         song_crud = SongCRUD(self.db)
         user_crud = UserCRUD(self.db)
+        library_crud = LibraryCRUD(self.db)
         
         # Initialize discovery engine (128-dim vector scoring)
         self.discovery = DiscoveryEngine(
@@ -247,6 +248,7 @@ class MusicBot(commands.Bot):
             playback_crud=playback_crud,
             reaction_crud=reaction_crud,
             song_crud=song_crud,
+            library_crud=library_crud,
         )
         
         # Initialize preference manager

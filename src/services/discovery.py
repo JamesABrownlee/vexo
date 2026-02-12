@@ -30,7 +30,7 @@ from src.services.vector_engine import (
 )
 
 if TYPE_CHECKING:
-    from src.database.crud import PreferenceCRUD, PlaybackCRUD, ReactionCRUD, SongCRUD
+    from src.database.crud import PreferenceCRUD, PlaybackCRUD, ReactionCRUD, SongCRUD, LibraryCRUD
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class DiscoveredSong:
     genre: str | None = None
     year: int | None = None
     score: float = 0.0  # Vector similarity score
+    reasoning: dict | None = None  # Full reasoning data for dashboard
 
 
 class TurnTracker:
@@ -114,6 +115,7 @@ class DiscoveryEngine:
         playback_crud: "PlaybackCRUD",
         reaction_crud: "ReactionCRUD",
         song_crud: "SongCRUD | None" = None,
+        library_crud: "LibraryCRUD | None" = None,
     ):
         self.youtube = youtube
         self.spotify = spotify
@@ -122,6 +124,7 @@ class DiscoveryEngine:
         self.playback = playback_crud
         self.reactions = reaction_crud
         self.songs = song_crud
+        self.library = library_crud
         self.turn_tracker = TurnTracker()
         # In-memory per-guild recent picks so that when the queue is being
         # filled with multiple discovery calls in a row (before playback
@@ -205,7 +208,7 @@ class DiscoveryEngine:
         )
 
         # ── Step 3: Score all candidates against user vector ──
-        scored = score_candidates(user_vector, candidates, temperature=0.15)
+        scored = score_candidates(user_vector, candidates, temperature=0.1)
 
         # Log top 5 for debugging
         for i, (cand, sc) in enumerate(scored[:5]):
@@ -257,6 +260,21 @@ class DiscoveryEngine:
             year=winner.year,
             genre=winner.genres[0] if winner.genres else None,
             score=winner_score,
+            reasoning={
+                "user_vector_debug": debug_vector(user_vector, "user"),
+                "candidates": [
+                    {
+                        "title": cand.title,
+                        "artist": cand.artist,
+                        "score": round(sc, 4),
+                        "source": cand.source,
+                        "video_id": cand.video_id
+                    }
+                    for cand, sc in scored[:10]
+                ],
+                "temperature": 0.5,
+                "top_k": 8
+            }
         )
 
     # ════════════════════════════════════════════════════════════════
@@ -355,11 +373,17 @@ class DiscoveryEngine:
     async def _pool_library(
         self, user_id: int, seen_ids: set[str]
     ) -> list[SongCandidate]:
-        """Gather candidates from user's liked library."""
+        """Gather candidates from user's liked library AND manual requests."""
         candidates = []
-        liked = await self.reactions.get_liked_songs(user_id, limit=100)
+        
+        # Use our new unified library search
+        if self.library:
+            library_entries = await self.library.get_user_library_songs(user_id, limit=100)
+        else:
+            # Fallback to just reactions if library CRUD is missing
+            library_entries = await self.reactions.get_liked_songs(user_id, limit=100)
 
-        for song in liked:
+        for song in library_entries:
             vid = song.get("canonical_yt_id")
             if not vid or vid in seen_ids:
                 continue
@@ -369,7 +393,7 @@ class DiscoveryEngine:
                 genres=genres,
                 artist=song.get("artist_name"),
                 year=song.get("release_year"),
-                popularity=0.7,
+                popularity=0.7,  # library songs are high confidence
                 source="library",
             )
             candidates.append(SongCandidate(
@@ -390,12 +414,17 @@ class DiscoveryEngine:
     ) -> list[SongCandidate]:
         """Gather candidates from YouTube watch playlist (related songs)."""
         candidates = []
-        liked = await self.reactions.get_liked_songs(user_id, limit=20)
+        # Support both new unified library and legacy likes for seeding
+        if self.library:
+            liked = await self.library.get_user_library_songs(user_id, limit=20)
+        else:
+            liked = await self.reactions.get_liked_songs(user_id, limit=20)
+
         if not liked:
             return []
 
-        # Pick up to 2 random seed songs for broader coverage
-        seeds = random.sample(liked, min(2, len(liked)))
+        # Increase seeds for broader variety
+        seeds = random.sample(liked, min(3, len(liked)))
 
         for seed_song in seeds:
             seed_yt_id = seed_song.get("canonical_yt_id")
@@ -415,13 +444,11 @@ class DiscoveryEngine:
                 if track.artist.lower() == seed_artist:
                     continue
 
-                # Related songs inherit seed's genres at reduced weight
-                # (YouTube related tracks likely share genre characteristics)
                 vec = encode_song(
-                    genres=seed_genres,  # inferred from seed
+                    genres=seed_genres,
                     artist=track.artist,
                     year=track.year,
-                    popularity=0.5,
+                    popularity=0.6,
                     source="similar",
                 )
                 candidates.append(SongCandidate(
@@ -446,8 +473,8 @@ class DiscoveryEngine:
         if not top_artists:
             return []
 
-        # Sample a few artists to query
-        sample = random.sample(top_artists, min(3, len(top_artists)))
+        # Increase sample size
+        sample = random.sample(top_artists, min(4, len(top_artists)))
 
         for artist_name, affinity in sample:
             sp_result = await self.spotify.search_artist(artist_name)
@@ -467,7 +494,7 @@ class DiscoveryEngine:
                     genres=artist_genres,
                     artist=track.artist,
                     year=track.release_year,
-                    popularity=track.popularity / 100.0 if track.popularity else 0.5,
+                    popularity=track.popularity / 100.0 if track.popularity and track.popularity > 60 else 0.6,
                     source="artist",
                 )
                 candidates.append(SongCandidate(
@@ -479,7 +506,7 @@ class DiscoveryEngine:
                     duration_seconds=track.duration_seconds,
                     year=track.release_year,
                     genres=artist_genres,
-                    popularity=track.popularity / 100.0 if track.popularity else 0.5,
+                    popularity=track.popularity / 100.0 if track.popularity else 0.6,
                 ))
 
         return candidates
@@ -495,13 +522,14 @@ class DiscoveryEngine:
         tracks: list[YTTrack] = []
         if playlists:
             playlist = random.choice(playlists)
+            # Reduce limit slightly to allow other pools more room in scoring
             tracks = await self.youtube.get_playlist_tracks(
-                playlist["browse_id"], limit=40
+                playlist["browse_id"], limit=30
             )
         else:
             # Fallback: direct search
             tracks = await self.youtube.search(
-                "top hits 2024", filter_type="songs", limit=20
+                "top hits 2024", filter_type="songs", limit=15
             )
 
         for track in tracks:
@@ -512,7 +540,7 @@ class DiscoveryEngine:
                 genres=None,  # chart songs: no genre data
                 artist=track.artist,
                 year=track.year,
-                popularity=0.7,  # charts = popular
+                popularity=0.6,  # Reduced from 0.7 for fairness
                 source="wildcard",
             )
             candidates.append(SongCandidate(

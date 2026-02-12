@@ -414,6 +414,7 @@ class DashboardCog(commands.Cog):
                 data["duration_seconds"] = player.current.duration_seconds
                 data["genre"] = player.current.genre
                 data["year"] = player.current.year
+                data["reasoning"] = player.current.reasoning
                 if player.current.for_user_id:
                     user = self.bot.get_user(player.current.for_user_id)
                     data["for_user"] = user.display_name if user else str(player.current.for_user_id)

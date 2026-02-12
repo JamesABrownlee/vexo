@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Music2, RefreshCw, AudioLines } from 'lucide-react';
+import { Music2, RefreshCw, AudioLines, Info } from 'lucide-react';
+import ReasoningDialog from './ReasoningDialog';
 
 interface PlayingGuild {
     id: string;
@@ -14,11 +15,13 @@ interface PlayingGuild {
     genre?: string | null;
     discovery_reason?: string | null;
     requested_by?: string | null;
+    reasoning?: any;
 }
 
 export default function NowPlayingCard() {
     const [playing, setPlaying] = useState<PlayingGuild | null>(null);
     const [loading, setLoading] = useState(true);
+    const [isReasoningOpen, setIsReasoningOpen] = useState(false);
 
     const fetchNowPlaying = async () => {
         try {
@@ -145,9 +148,28 @@ export default function NowPlayingCard() {
                                 {playing.genre}
                             </span>
                         )}
+
+                        {playing.reasoning && (
+                            <button
+                                onClick={() => setIsReasoningOpen(true)}
+                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/20 text-violet-400 border border-violet-500/30 hover:bg-violet-500/30 transition-colors gap-1"
+                            >
+                                <Info className="w-2.5 h-2.5" />
+                                WHY?
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
+
+            {playing.reasoning && (
+                <ReasoningDialog
+                    isOpen={isReasoningOpen}
+                    onClose={() => setIsReasoningOpen(false)}
+                    reasoning={playing.reasoning}
+                    songTitle={playing.current_song || ''}
+                />
+            )}
         </div>
     );
 }

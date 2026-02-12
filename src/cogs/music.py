@@ -77,6 +77,7 @@ class QueueItem:
     duration_seconds: int | None = None
     genre: str | None = None
     year: int | None = None
+    reasoning: dict | None = None  # Detailed discovery reasoning
 
 
 @dataclass
@@ -756,6 +757,7 @@ class MusicCog(commands.Cog):
                         duration_seconds=discovered.duration_seconds,
                         genre=discovered.genre,
                         year=discovered.year,
+                        reasoning=discovered.reasoning,
                     )
             except Exception as e:
                 log.event(Category.DISCOVERY, Event.DISCOVERY_FAILED, level=logging.ERROR, error=str(e))

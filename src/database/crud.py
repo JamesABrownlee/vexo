@@ -799,6 +799,20 @@ class LibraryCRUD:
         """
         return await self.db.fetch_all(query, (limit,))
 
+    async def get_user_library_songs(self, user_id: int, limit: int = 100) -> list[dict]:
+        """Get all songs in a user's library (explicitly liked OR manually requested)."""
+        query = """
+            SELECT s.* FROM songs s
+            WHERE s.id IN (
+                SELECT song_id FROM song_library_entries WHERE user_id = ?
+                UNION
+                SELECT song_id FROM song_reactions WHERE user_id = ? AND reaction IN ('like', 'love')
+            )
+            ORDER BY s.created_at DESC
+            LIMIT ?
+        """
+        return await self.db.fetch_all(query, (user_id, user_id, limit))
+
 
 class NowPlayingMessageCRUD:
     """CRUD operations for tracking the last Now Playing message per guild."""
