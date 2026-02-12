@@ -11,6 +11,7 @@ Replaces the old 4-strategy if/elif router with a unified vector scoring pipelin
 import asyncio
 import logging
 import random
+import collections
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -122,6 +123,10 @@ class DiscoveryEngine:
         self.reactions = reaction_crud
         self.songs = song_crud
         self.turn_tracker = TurnTracker()
+        # In-memory per-guild recent picks so that when the queue is being
+        # filled with multiple discovery calls in a row (before playback
+        # history is written), we don't keep returning the same top song.
+        self._guild_recent_picks: dict[int, collections.deque[str]] = {}
 
     # ════════════════════════════════════════════════════════════════
     #  Main Entry Point
@@ -160,9 +165,18 @@ class DiscoveryEngine:
             weights = self.DEFAULT_WEIGHTS
 
         # ── Cooldown set ──
-        recent_yt_ids = set(await self.playback.get_recent_history_window(guild_id, cooldown_seconds))
+        recent_yt_ids = set(
+            await self.playback.get_recent_history_window(guild_id, cooldown_seconds)
+        )
         recent_by_count = await self.playback.get_recent_history(guild_id, limit=20)
         recent_yt_ids.update(r["canonical_yt_id"] for r in recent_by_count)
+
+        # Also include in-memory recent picks for this guild so that when the
+        # queue is being filled with several discovery calls in a row, we
+        # don't keep selecting the same song before it appears in DB history.
+        extra_recent = self._guild_recent_picks.get(guild_id)
+        if extra_recent:
+            recent_yt_ids.update(extra_recent)
 
         # ── Step 1: Build user profile vector ──
         user_vector = await self._build_user_vector(turn_user_id)
@@ -223,6 +237,14 @@ class DiscoveryEngine:
             f"Selected [{winner.source}] {winner.artist} - {winner.title} "
             f"(score={winner_score:.4f}) for user {turn_user_id}"
         )
+
+        # Remember this pick in a small per-guild window so subsequent
+        # discovery calls in the same session don't surface it again
+        # immediately, even before it is visible in playback history.
+        recent_for_guild = self._guild_recent_picks.setdefault(
+            guild_id, collections.deque(maxlen=16)
+        )
+        recent_for_guild.append(winner.video_id)
 
         return DiscoveredSong(
             video_id=winner.video_id,
