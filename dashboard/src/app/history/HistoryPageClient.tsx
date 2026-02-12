@@ -26,11 +26,14 @@ interface HistoryPageClientProps {
 }
 
 // Discovery source labels and colors
+// Note: backend may use both 'artist' (new) and 'same_artist' (legacy).
 const discoveryLabels: Record<string, { label: string; color: string; icon: string }> = {
-    'user_request': { label: 'Requested', color: 'bg-blue-500/20 text-blue-400', icon: '🎯' },
-    'similar': { label: 'Similar', color: 'bg-violet-500/20 text-violet-400', icon: '🎵' },
-    'same_artist': { label: 'Same Artist', color: 'bg-pink-500/20 text-pink-400', icon: '🎤' },
-    'wildcard': { label: 'Discovery', color: 'bg-green-500/20 text-green-400', icon: '🎲' },
+    user_request: { label: 'Requested', color: 'bg-blue-500/20 text-blue-400', icon: '🎯' },
+    similar: { label: 'Similar', color: 'bg-violet-500/20 text-violet-400', icon: '🎵' },
+    artist: { label: 'Artist', color: 'bg-pink-500/20 text-pink-400', icon: '🎤' },
+    same_artist: { label: 'Artist', color: 'bg-pink-500/20 text-pink-400', icon: '🎤' },
+    wildcard: { label: 'Discovery', color: 'bg-green-500/20 text-green-400', icon: '🎲' },
+    library: { label: 'Library', color: 'bg-amber-500/20 text-amber-400', icon: '📚' },
 };
 
 function HistoryRow({ item, expanded, onToggle }: { item: HistoryItem; expanded: boolean; onToggle: () => void }) {
@@ -215,7 +218,9 @@ function HistoryRow({ item, expanded, onToggle }: { item: HistoryItem; expanded:
 export default function HistoryPageClient({ initialHistory }: HistoryPageClientProps) {
     const [searchQuery, setSearchQuery] = useState('');
     const [genreFilter, setGenreFilter] = useState<string>('all');
-    const [sourceFilter, setSourceFilter] = useState<'all' | 'user_request' | 'similar' | 'same_artist' | 'wildcard'>('all');
+    const [sourceFilter, setSourceFilter] = useState<
+        'all' | 'user_request' | 'similar' | 'artist' | 'same_artist' | 'wildcard' | 'library'
+    >('all');
     const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'skipped'>('all');
     const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
     const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
@@ -379,8 +384,10 @@ export default function HistoryPageClient({ initialHistory }: HistoryPageClientP
                     <option value="all">All Sources</option>
                     <option value="user_request">🎯 Requested</option>
                     <option value="similar">🎵 Similar</option>
-                    <option value="same_artist">🎤 Same Artist</option>
+                    <option value="artist">🎤 Artist</option>
+                    <option value="same_artist">🎤 Artist (legacy)</option>
                     <option value="wildcard">🎲 Discovery</option>
+                    <option value="library">📚 Library</option>
                 </select>
 
                 {/* Status Filter */}
